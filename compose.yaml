@@ -1,0 +1,157 @@
+name: specter-says-hi
+
+services:
+  feathertalk:
+    profiles: ["feathertalk"]
+    image: feathertalk-specter:local
+    build:
+      context: ./feathertalk_lab
+      dockerfile: Dockerfile.specter
+    gpus: all
+    restart: unless-stopped
+    mem_limit: 4g
+    cpus: 4
+    environment:
+      PYTHONPATH: /lab:/opt/FeatherTalk
+      FEATHERTALK_MODE: ${SPECTER_FEATHERTALK_MODE:-fast}
+      FEATHERTALK_BUFFER_MS: ${SPECTER_FEATHERTALK_BUFFER_MS:-100}
+      FEATHERTALK_TEETH_MODE: ${SPECTER_FEATHERTALK_TEETH_MODE:-new}
+      FEATHERTALK_SETTLE_MS: ${SPECTER_FEATHERTALK_SETTLE_MS:-320}
+      FEATHERTALK_DETAIL_PROFILE: ${SPECTER_FEATHERTALK_DETAIL_PROFILE:-model_idle}
+    volumes:
+      - ./feathertalk_lab/data:/work/data:ro
+      - ./feathertalk_lab/checkpoints:/work/checkpoints:ro
+      - ./feathertalk_lab/output:/work/output
+      - ./feathertalk_lab:/lab:ro
+    ports:
+      - "127.0.0.1:18986:8080"
+      - "127.0.0.1:18988:8081"
+    command: ["python", "/lab/specter_server.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 12
+
+  dh-live-mini:
+    depends_on:
+      dh-live-inference:
+        condition: service_healthy
+    build:
+      context: ./dh_live_mini
+    environment:
+      DH_LIVE_AUDIO_BUFFER_MS: ${SPECTER_DH_LIVE_BUFFER_MS:-100}
+    restart: unless-stopped
+    volumes:
+      - ./dh_live_mini/assets:/opt/DH_live/web_demo/static/assets
+    ports:
+      - "127.0.0.1:18888:8888"
+
+  dh-live-inference:
+    build:
+      context: ./dh_live_mini
+      dockerfile: Dockerfile.prep
+    restart: unless-stopped
+    environment:
+      PYTHONPATH: /app:/opt/DH_live
+      TORCH_NUM_THREADS: "2"
+      DH_LIVE_AUDIO_BUFFER_MS: ${SPECTER_DH_LIVE_BUFFER_MS:-100}
+    volumes:
+      - ./DH_live_From_baiduyun/checkpoint:/checkpoint:ro
+      - ./dh_live_mini/assets:/avatar:ro
+    ports:
+      - "127.0.0.1:18889:8899"
+    command: ["python", "/app/inference_server.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8899/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  dh-live-full:
+    build:
+      context: ./dh_live_full
+    gpus: all
+    restart: unless-stopped
+    environment:
+      DH_LIVE_AUDIO_BUFFER_MS: ${SPECTER_DH_LIVE_BUFFER_MS:-100}
+      DH_LIVE_TEETH_MODE: ${SPECTER_DH_LIVE_TEETH_MODE:-source}
+      DH_LIVE_TEETH_STRENGTH: ${SPECTER_DH_LIVE_TEETH_STRENGTH:-0.85}
+      DH_LIVE_JPEG_QUALITY: ${SPECTER_DH_LIVE_JPEG_QUALITY:-95}
+      DH_LIVE_SETTLE_MS: ${SPECTER_DH_LIVE_SETTLE_MS:-320}
+      TORCH_NUM_THREADS: "2"
+    volumes:
+      - ./DH_live_From_baiduyun/checkpoint:/checkpoint:ro
+      - ./dh_live_full/avatar:/avatar:ro
+    ports:
+      - "127.0.0.1:18890:8898"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8898/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  dh-live-full-prepare:
+    profiles: ["prepare"]
+    build:
+      context: ./dh_live_full
+    volumes:
+      - ./dh_live_mini/generated:/mini_data:ro
+      - ./dh_live_full/avatar:/avatar
+    command: ["python", "/app/prepare_avatar.py"]
+
+  dh-live-prepare:
+    profiles: ["prepare"]
+    build:
+      context: ./dh_live_mini
+      dockerfile: Dockerfile.prep
+    volumes:
+      - ./dh_live_mini/input:/input:ro
+      - ./dh_live_mini/checkpoint:/opt/DH_live/checkpoint:ro
+      - ./dh_live_mini/generated:/output
+    command: ["python", "/app/prepare.py", "/input/reference.mp4", "/output/reference"]
+
+  dh-live-prepare-assets:
+    profiles: ["prepare"]
+    build:
+      context: ./dh_live_mini
+      dockerfile: Dockerfile.prep
+    volumes:
+      - ./dh_live_mini/checkpoint:/opt/DH_live/checkpoint:ro
+      - ./dh_live_mini/generated:/output
+    command: ["python", "/app/prepare_assets.py", "/output/reference"]
+
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    restart: unless-stopped
+    environment:
+      MTX_RTSPTRANSPORTS: tcp
+    ports:
+      - "127.0.0.1:18554:8554"
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "127.0.0.1:1884:1883"
+
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:stable-tensorrt
+    restart: unless-stopped
+    stop_grace_period: 30s
+    shm_size: "256mb"
+    gpus: all
+    depends_on:
+      - mediamtx
+      - mosquitto
+    volumes:
+      - ./frigate:/config
+      - ./media:/media/frigate
+    tmpfs:
+      - /tmp/cache:size=100000000
+    ports:
+      - "127.0.0.1:8972:8971"
+      - "127.0.0.1:15000:5000"

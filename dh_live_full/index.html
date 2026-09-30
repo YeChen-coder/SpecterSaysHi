@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Specter × DH Live</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #111; color: #eee; font: 16px system-ui; }
+    #idle-video, #frame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+    #idle-video { z-index: 0; }
+    #frame { z-index: 1; opacity: 0; transition: opacity 180ms linear; pointer-events: none; }
+    #status { position: fixed; left: 12px; bottom: 12px; z-index: 2; padding: 8px 12px;
+              background: #000b; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <video id="idle-video" src="/avatar/video" poster="/poster" autoplay loop muted playsinline></video>
+  <img id="frame" alt="">
+  <div id="status">正在加载人物素材…</div>
+  <script>
+  (() => {
+    const fps = 25;
+    const idle = document.getElementById('idle-video');
+    const image = document.getElementById('frame');
+    const status = document.getElementById('status');
+    let socket;
+    let queue = [];
+    let pendingIndex = -1;
+    let shownIndex = -1;
+    let active = false;
+    let ending = false;
+    let transition = 0;
+    let previousUrl = null;
+    let rendering = false;
+    const frameCount = () => Math.max(1, Math.round((idle.duration || 30.08) * fps));
+
+    idle.addEventListener('loadeddata', () => {
+      if (!active) status.textContent = '等待 Realtime 音频';
+      if (!active) idle.play().catch(() => {});
+    });
+    idle.addEventListener('error', () => {
+      status.textContent = '人物循环视频加载失败';
+    });
+
+    function resumeIdle() {
+      if (!active) return;
+      active = false;
+      ending = false;
+      queue = [];
+      const token = ++transition;
+      const reveal = () => {
+        if (token !== transition) return;
+        image.style.transitionDuration = '180ms';
+        image.style.opacity = '0';
+        document.body.dataset.mode = 'idle';
+        status.textContent = '等待 Realtime 音频';
+      };
+      const play = () => {
+        if (token !== transition) return;
+        idle.play().then(() => {
+          if (token !== transition) return;
+          if (idle.requestVideoFrameCallback) idle.requestVideoFrameCallback(reveal);
+          else requestAnimationFrame(reveal);
+        }).catch(reveal);
+      };
+      if (shownIndex >= 0 && idle.readyState >= 1) {
+        const target = ((shownIndex + 1) % frameCount()) / fps;
+        if (Math.abs(idle.currentTime - target) > 0.02) {
+          idle.addEventListener('seeked', play, {once: true});
+          idle.currentTime = target;
+        } else play();
+      } else play();
+    }
+
+    function startSpeech() {
+      ++transition;
+      active = true;
+      ending = false;
+      queue = [];
+      shownIndex = -1;
+      pendingIndex = -1;
+      image.style.transitionDuration = '80ms';
+      image.style.opacity = '0';
+      document.body.dataset.mode = 'speaking';
+      idle.pause();
+      const frame = Math.floor(idle.currentTime * fps) % frameCount();
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({type: 'sync', frame}));
+      }
+      status.textContent = '正在接收完整版口型';
+    }
+
+    function connect() {
+      const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(`${scheme}//${location.host}/view`);
+      socket.binaryType = 'blob';
+      socket.onopen = () => {
+        if (!active && idle.readyState >= 2) status.textContent = '等待 Realtime 音频';
+      };
+      socket.onmessage = event => {
+        if (typeof event.data === 'string') {
+          let control;
+          try { control = JSON.parse(event.data); } catch { return; }
+          if (control.type === 'start') startSpeech();
+          else if (control.type === 'frame') {
+            pendingIndex = control.index;
+            document.body.dataset.mode = control.phase === 'settling' ? 'settling' : 'speaking';
+          }
+          else if (control.type === 'settling') document.body.dataset.mode = 'settling';
+          else if (control.type === 'reset') {
+            queue = [];
+            resumeIdle();
+          } else if (control.type === 'idle') {
+            ending = true;
+            if (!queue.length && !rendering) resumeIdle();
+          }
+          return;
+        }
+        if (!active) return;
+        queue.push({blob: event.data, index: pendingIndex});
+        if (queue.length > 4) queue.splice(0, queue.length - 4);
+      };
+      socket.onclose = () => {
+        resumeIdle();
+        status.textContent = '连接断开，正在重连';
+        setTimeout(connect, 1000);
+      };
+    }
+
+    setInterval(() => {
+      if (rendering) return;
+      if (!queue.length) {
+        if (ending && !rendering) resumeIdle();
+        return;
+      }
+      const next = queue.shift();
+      const token = transition;
+      const url = URL.createObjectURL(next.blob);
+      rendering = true;
+      image.onload = () => {
+        rendering = false;
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        previousUrl = url;
+        if (!active || token !== transition) return;
+        shownIndex = next.index;
+        image.dataset.index = shownIndex;
+        image.style.opacity = '1';
+        status.textContent = '完整版实时渲染';
+      };
+      image.onerror = () => {
+        rendering = false;
+        URL.revokeObjectURL(url);
+      };
+      image.src = url;
+    }, 40);
+
+    idle.play().catch(() => {});
+    connect();
+  })();
+  </script>
+</body>
+</html>

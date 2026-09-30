@@ -1,0 +1,2 @@
+FROM feathertalk-lab:local
+RUN python -m pip install mediapipe==0.10.21 opencv-contrib-python==4.9.0.80 numpy==1.26.4

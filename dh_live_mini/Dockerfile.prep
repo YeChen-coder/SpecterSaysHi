@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates ffmpeg libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /opt/DH_live \
+    && cd /opt/DH_live \
+    && git init \
+    && git remote add origin https://github.com/kleinlee/DH_live.git \
+    && git fetch --depth 1 origin 4467e97cd97194c2c54762043cf121c6d313db12 \
+    && git checkout --detach FETCH_HEAD \
+    && rm -rf .git
+RUN pip install --no-cache-dir torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir numpy==1.26.4 opencv-python-headless==4.10.0.84 scipy scikit-learn kaldi-native-fbank tqdm
+
+COPY patch_upstream.py /app/patch_upstream.py
+WORKDIR /opt/DH_live
+ENV PYTHONPATH=/opt/DH_live
+RUN python /app/patch_upstream.py
+COPY prepare.py /app/prepare.py
+COPY prepare_assets.py /app/prepare_assets.py
+COPY streaming_resampler.py streaming_blendshape.py mouth_compositor.py independent_image_renderer.py inference_server.py /app/

@@ -1,0 +1,33 @@
+name: feathertalk-lab
+services:
+  worker:
+    image: feathertalk-lab:local
+    build: .
+    gpus: all
+    network_mode: none
+    mem_limit: 8g
+    cpus: 4
+    shm_size: 1g
+    volumes:
+      - ./data:/work/data
+      - ./output:/work/output
+      - ./checkpoints:/work/checkpoints
+      - ./:/lab:ro
+    environment:
+      PYTHONPATH: /lab:/opt/FeatherTalk
+    command: [python, -c, 'import torch; print(torch.cuda.is_available())']
+  loop:
+    image: feathertalk-lab:teeth
+    gpus: all
+    mem_limit: 4g
+    cpus: 4
+    ports:
+      - '127.0.0.1:18986:8080'
+    volumes:
+      - ./data:/work/data:ro
+      - ./checkpoints:/work/checkpoints:ro
+      - ./output:/work/output
+      - ./:/lab:ro
+    environment:
+      PYTHONPATH: /lab:/opt/FeatherTalk
+    command: [python, /lab/loop_server.py]

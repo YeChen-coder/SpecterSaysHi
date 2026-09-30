@@ -1,0 +1,2 @@
+FROM feathertalk-lab:teeth
+RUN python -m pip install fastapi==0.115.12 uvicorn==0.34.2 websockets==16.0

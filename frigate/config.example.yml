@@ -1,0 +1,63 @@
+mqtt:
+  enabled: true
+  host: mosquitto
+  port: 1883
+
+ffmpeg:
+  path: "7.0"
+  hwaccel_args: preset-nvidia
+
+detectors:
+  openvino:
+    type: openvino
+    device: CPU
+
+model:
+  width: 300
+  height: 300
+  input_tensor: nhwc
+  input_pixel_format: bgr
+  path: /openvino-model/ssdlite_mobilenet_v2.xml
+  labelmap_path: /openvino-model/coco_91cl_bkgr.txt
+
+face_recognition:
+  enabled: true
+  model_size: small
+
+classification:
+  custom:
+    household_cats:
+      # Enable only after supplying your own classifier resources.
+      enabled: false
+      threshold: 0.8
+      object_config:
+        objects:
+          - cat
+        classification_type: sub_label
+
+objects:
+  track:
+    - person
+    - cat
+
+record:
+  enabled: false
+
+snapshots:
+  enabled: false
+
+cameras:
+  desk_camera:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://mediamtx:8554/desk_camera
+          input_args: preset-rtsp-generic
+          roles:
+            - detect
+    detect:
+      enabled: true
+      width: 1280
+      height: 720
+      fps: 5
+version: 0.18-0

@@ -1,0 +1,18 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'dev.specter.phone'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'dev.specter.phone'
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName '0.1'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
