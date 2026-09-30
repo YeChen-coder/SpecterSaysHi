@@ -1,3 +1,5 @@
+**技术部分请去看https://github.com/YeChen-coder/SpecterSaysHi/blob/main/TECHNICAL_GUIDE.md ， 这里作为唯一一个还有可能被人类看到的文档， 是用来表达的**
+
 # SpecterSaysHi
 在最开始，先谈一下这是个什么东西。
 
