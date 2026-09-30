@@ -3,7 +3,7 @@
 # SpecterSaysHi
 在最开始，先谈一下这是个什么东西。
 
-它是基于 Ebo Bot 项目大改做起来的。不过ebo项目本来也是我做的，所以基本上一直是我自己在迭代。-补充那个 Ebo 模块那边得大改了，因为现在这个框架我觉得已经比 Ebo 那边好太多了。所以之前 Ebo 的所有东西全得抹掉，只保留它那个输入和输出的接口（还是可以复用的）。但是其他中间的流程，全得重新搞。
+它是基于 Ebo Bot to Digital Pet 项目 （https://github.com/YeChen-coder/EBOBotToDigitalPet）大改做起来的。不过ebo bot项目本来也是我独立做的，所以事实上一直是我自己在迭代。-补充那个 Ebo 模块那边得大改了，因为现在这个框架我觉得已经比 Ebo 那边好太多了。所以之前 Ebo 的所有东西全得抹掉，只保留它那个输入和输出的接口（还是可以复用的）。但是其他中间的流程，全得重新搞。
 
 SpecterSaysHi其实是三个组件的合体，整合出了现在的效果，整体算是一个比较完整的东西了。Why is it called SpecterSaysHi? It's because I'm a big fan of Suits and I really like Harvey Specter. I already named my computer Heavy, but at the same time, there is a famous law agent called Harvey AI, and I really don't want to repeat that name. So, let's simply name this program Specter. Specter is also a good name.
 
@@ -395,7 +395,7 @@ By the way，说一个教训：所有事情，尤其是对我自己来说，“3
 
 在肉眼可见的远未来（倒不是近未来），肯定得重构，必须得重构。这个事情如果不重构、不把它们之间的耦合区分清楚，在未来的每一次更新里，它只会一次又一次地跑来烦我。-哇，重构这么大的事情，我们现在还是不要做了好吗？真的是太累了。其实没重构，就是单纯地让他给我清了一个列表，告诉我说哪个文件是干嘛的、有什么用。这个在当前目录下的 technical guide.md 里面有写，就看那个列表吧，因为当前文件目录真的是一团糊啊。
 
-总之今天就到这儿，call it a day，现在去忙了。
+总之今天就到这儿，call it a day，现在去躺尸了。
 
 既然当前这个项目跑通了，那就去反哺之前 Ebo bot 的项目。现在正让 Codex 去把 Ebo bot 本地版重构。
 
