@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -16,7 +16,7 @@
 <body>
   <video id="idle-video" src="/avatar/video" poster="/poster" autoplay loop muted playsinline></video>
   <img id="frame" alt="">
-  <div id="status">正在加载人物素材…</div>
+  <div id="status">Loading avatar…</div>
   <script>
   (() => {
     const fps = 25;
@@ -37,11 +37,11 @@
     const frameCount = () => Math.max(1, Math.round((idle.duration || 30.08) * fps));
 
     idle.addEventListener('loadeddata', () => {
-      if (!active) status.textContent = '等待 Realtime 音频';
+      if (!active) status.textContent = 'Waiting for Realtime audio';
       if (!active) idle.play().catch(() => {});
     });
     idle.addEventListener('error', () => {
-      status.textContent = '人物循环视频加载失败';
+      status.textContent = 'Unable to load avatar video';
     });
 
     function resumeIdle() {
@@ -55,7 +55,7 @@
         image.style.transitionDuration = '80ms';
         image.style.opacity = '0';
         document.body.dataset.mode = 'idle';
-        status.textContent = '等待 Realtime 音频';
+        status.textContent = 'Waiting for Realtime audio';
       };
       const play = () => {
         if (token !== transition) return;
@@ -93,7 +93,7 @@
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({type: 'sync', frame}));
       }
-      status.textContent = '正在接收 FeatherTalk 口型';
+      status.textContent = 'Receiving FeatherTalk frames';
     }
 
     function connect() {
@@ -101,7 +101,7 @@
       socket = new WebSocket(`${scheme}//${location.host}/view`);
       socket.binaryType = 'blob';
       socket.onopen = () => {
-        if (!active && idle.readyState >= 2) status.textContent = '等待 Realtime 音频';
+        if (!active && idle.readyState >= 2) status.textContent = 'Waiting for Realtime audio';
       };
       socket.onmessage = event => {
         if (typeof event.data === 'string') {
@@ -118,14 +118,14 @@
               queue = [];
             }
             document.body.dataset.mode = 'settling';
-            status.textContent = '正在平滑收口';
+            status.textContent = 'Returning to idle';
           }
           else if (control.type === 'resume') {
             ++transition;
             queue = [];
             ending = false;
             document.body.dataset.mode = 'speaking';
-            status.textContent = 'FeatherTalk 实时渲染';
+            status.textContent = 'FeatherTalk live';
           }
           else if (control.type === 'reset') {
             queue = [];
@@ -142,7 +142,7 @@
       };
       socket.onclose = () => {
         resumeIdle();
-        status.textContent = '连接断开，正在重连';
+        status.textContent = 'Disconnected. Reconnecting…';
         setTimeout(connect, 1000);
       };
     }
@@ -174,7 +174,7 @@
         image.dataset.phase = next.phase;
         document.body.dataset.mode = next.phase;
         image.style.opacity = '1';
-        status.textContent = next.phase === 'settling' ? '正在平滑收口' : 'FeatherTalk 实时渲染';
+        status.textContent = next.phase === 'settling' ? 'Returning to idle' : 'FeatherTalk live';
       };
       decoded.onerror = () => {
         rendering = false;
