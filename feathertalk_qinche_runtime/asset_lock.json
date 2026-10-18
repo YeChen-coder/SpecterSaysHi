@@ -1,0 +1,10 @@
+{
+  "data/base.jpg": "518607a309269b2d3adf714c3b4ee66936990c87d33715b5d3d200c2392450b5",
+  "data/base.lms": "082da8d9c76381e0d82498f55a78e48ededc04fada874e51a2724cb02e52e990",
+  "data/natural_selection.json": "d07958ce8aaa6a4c6f881d65fc62c45e264e7cf73ff0583e3ebcc36a1f185c72",
+  "data/dynamic_base_natural/frames.npy": "165a350d118ae3978621a28ee44096dd1e20f980819a81db39953c2b8e352612",
+  "data/dynamic_base_natural/landmarks.npy": "9eb1c28056e66ab7dca7586f5039415f73e8c7f7f067e00102ba3cba2348bd4d",
+  "data/dynamic_base_natural/bboxes.npy": "7d92584b20e67781d4afb61865328a654c0839129b9f00fe341a7dca38b923b2",
+  "data/dynamic_base_natural/source_indices.npy": "38199d6f0881544439c8b2012d5dec69a9dad8f89f8a6730a66b277eaaf4ad49",
+  "output/dynamic_natural/idle_loop.mp4": "929326af5c9aae2fd613e8a492aceb731c0963635c60e38ac60eb84e9059d8b7"
+}

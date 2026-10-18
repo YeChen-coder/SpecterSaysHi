@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Specter × FeatherTalk</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #111; color: #eee; font: 16px system-ui; }
+    #idle-video, #frame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+    #idle-video { z-index: 0; }
+    #frame { z-index: 1; opacity: 0;  pointer-events: none; }
+    #status { position: fixed; left: 12px; bottom: 12px; z-index: 2; padding: 8px 12px;
+              background: #000b; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <video id="idle-video" src="/avatar/video" poster="/poster" autoplay loop muted playsinline></video>
+  <img id="frame" alt="">
+  <div id="status">Loading avatar…</div>
+  <script>
+  (() => {
+    const fps = 25;
+    const idle = document.getElementById('idle-video');
+    const image = document.getElementById('frame');
+    const status = document.getElementById('status');
+    let socket;
+    let timelineFrames = 500;
+    let queue = [];
+    let pendingIndex = -1;
+    let pendingPhase = 'speaking';
+    let shownIndex = -1;
+    let active = false;
+    let ending = false;
+    let transition = 0;
+    let previousUrl = null;
+    let rendering = false;
+    document.body.dataset.mode = 'idle';
+    fetch('/health').then(response => response.json()).then(health => {
+      document.title = 'Specter × FeatherTalk · ' + health.character;
+      document.body.dataset.character = health.character;
+      timelineFrames = health.base_frames;
+    }).catch(() => {});
+    const frameCount = () => timelineFrames;
+
+    idle.addEventListener('loadeddata', () => {
+      if (!active) status.textContent = 'Waiting for Realtime audio';
+      if (!active) idle.play().catch(() => {});
+    });
+    idle.addEventListener('error', () => {
+      status.textContent = 'Unable to load avatar video';
+    });
+
+    function resumeIdle() {
+      if (!active) return;
+      active = false;
+      ending = false;
+      queue = [];
+      const token = ++transition;
+      const reveal = () => {
+        if (token !== transition) return;
+        image.style.transitionDuration = '0ms';
+        image.style.opacity = '0';
+        document.body.dataset.mode = 'idle';
+        status.textContent = 'Waiting for Realtime audio';
+      };
+      const play = () => {
+        if (token !== transition) return;
+        idle.play().then(() => {
+          if (token !== transition) return;
+          if (idle.requestVideoFrameCallback) idle.requestVideoFrameCallback(reveal);
+          else requestAnimationFrame(reveal);
+        }).catch(reveal);
+      };
+      if (shownIndex >= 0 && idle.readyState >= 1) {
+        // Continue at the next frame of the approved ping-pong timeline.
+        const target = ((shownIndex + 1) % frameCount()) / fps;
+        document.body.dataset.handoffIndex = shownIndex;
+        if (Math.abs(idle.currentTime - target) > 0.02) {
+          idle.addEventListener('seeked', play, {once: true});
+          idle.currentTime = target;
+        } else play();
+      } else play();
+    }
+
+    function startSpeech() {
+      ++transition;
+      active = true;
+      ending = false;
+      queue = [];
+      shownIndex = -1;
+      pendingIndex = -1;
+      pendingPhase = 'speaking';
+      image.style.transitionDuration = '0ms';
+      image.style.opacity = '0';
+      document.body.dataset.mode = 'speaking';
+      idle.pause();
+      const frame = Math.floor(idle.currentTime * fps) % frameCount();
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({type: 'sync', frame}));
+      }
+      status.textContent = 'Receiving FeatherTalk frames';
+    }
+
+    function connect() {
+      const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(`${scheme}//${location.host}/view`);
+      socket.binaryType = 'blob';
+      socket.onopen = () => {
+        if (!active && idle.readyState >= 2) status.textContent = 'Waiting for Realtime audio';
+      };
+      socket.onmessage = event => {
+        if (typeof event.data === 'string') {
+          let control;
+          try { control = JSON.parse(event.data); } catch { return; }
+          if (control.type === 'start') startSpeech();
+          else if (control.type === 'frame') {
+            pendingIndex = control.index;
+            pendingPhase = control.phase === 'settling' ? 'settling' : 'speaking';
+          }
+          else if (control.type === 'settling') {
+            if (control.drop_pending) {
+              ++transition;
+              queue = [];
+            }
+            document.body.dataset.mode = 'settling';
+            status.textContent = 'Returning to idle';
+          }
+          else if (control.type === 'resume') {
+            ++transition;
+            queue = [];
+            ending = false;
+            document.body.dataset.mode = 'speaking';
+            status.textContent = 'FeatherTalk live';
+          }
+          else if (control.type === 'reset') {
+            queue = [];
+            resumeIdle();
+          } else if (control.type === 'idle') {
+            ending = true;
+            if (!queue.length && !rendering) resumeIdle();
+          }
+          return;
+        }
+        if (!active) return;
+        queue.push({blob: event.data, index: pendingIndex, phase: pendingPhase});
+        if (queue.length > 4) queue.splice(0, queue.length - 4);
+      };
+      socket.onclose = () => {
+        resumeIdle();
+        status.textContent = 'Disconnected. Reconnecting…';
+        setTimeout(connect, 1000);
+      };
+    }
+
+    setInterval(() => {
+      if (rendering) return;
+      if (!queue.length) {
+        if (ending && !rendering) resumeIdle();
+        return;
+      }
+      const next = queue.shift();
+      const token = transition;
+      const url = URL.createObjectURL(next.blob);
+      rendering = true;
+      // Decode offscreen so a canceled frame cannot overwrite the visible
+      // face during a new utterance or the handoff to the idle video.
+      const decoded = new Image();
+      decoded.onload = () => {
+        rendering = false;
+        if (!active || token !== transition) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        if (previousUrl) URL.revokeObjectURL(previousUrl);
+        previousUrl = url;
+        image.src = url;
+        shownIndex = next.index;
+        image.dataset.index = shownIndex;
+        image.dataset.phase = next.phase;
+        document.body.dataset.mode = next.phase;
+        image.style.opacity = '1';
+        status.textContent = next.phase === 'settling' ? 'Returning to idle' : 'FeatherTalk live';
+      };
+      decoded.onerror = () => {
+        rendering = false;
+        URL.revokeObjectURL(url);
+      };
+      decoded.src = url;
+    }, 40);
+
+    idle.play().catch(() => {});
+    connect();
+  })();
+  </script>
+</body>
+</html>

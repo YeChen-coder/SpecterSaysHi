@@ -81,6 +81,7 @@ $('go').onclick=async()=>{
    if(token!==generation)return;const msg=JSON.parse(event.data);
    if(msg.error){$('status').textContent=msg.error;stop();return}
    if(msg.type==='ready'){
+    canvas.width=msg.width;canvas.height=msg.height;canvas.closest('.stage').style.aspectRatio=msg.width+'/'+msg.height;
     startFrame=msg.start_frame;activeTeeth=msg.teeth;
     $('status').textContent='正在按 100 ms 一包发送音频…';setState('buffering','等待第一帧');const begin=performance.now();
     for(let offset=0;offset<pcm.length;offset+=1600){const piece=pcm.slice(offset,offset+1600),at=(offset+piece.length)/16;timers.push(setTimeout(()=>{if(token===generation&&socket.readyState===1){if(firstSentAt===null)firstSentAt=performance.now();socket.send(piece.buffer)}},at))}

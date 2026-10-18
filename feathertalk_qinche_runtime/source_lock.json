@@ -1,0 +1,9 @@
+{
+  "vendor/face_utils.py": "25dee64adb555ec337828e7a0d362ce6b7b54854b26542642c0d80dc23903de9",
+  "vendor/feather_hubert.pth": "3b147e66502132bac3ff76b4730c2a83c341c75251d22a28182a5a1b689cfc46",
+  "vendor/inference.py": "87cbb21c9d9162886a4f3d32dffa6ca444854576d477368913547a53ea840a76",
+  "vendor/LICENSE": "52b612fef6cb450f213d942ed14ef630272e94ac4643a273105640b1037bf1b6",
+  "vendor/model.py": "7ecee92c4712edea3a1116dab45e119a3be7c656c681054f93628c1207f08154",
+  "vendor/data_utils/feather_hubert/feather_hubert.py": "f6403a08f33bd60a3883fcbcc3027c543cd55ec369ecf7fbfee67520bd6caad6",
+  "native_face_match.py": "4c763464098d1a02e5668527c50ecc36575bf6709e452294d9e645da4bc06d60"
+}

@@ -5,6 +5,7 @@ from http.server import SimpleHTTPRequestHandler,ThreadingHTTPServer
 import cv2,numpy as np
 from loop_core import LoopEngine,LoopSession
 from stream_core import MODES
+from range_http import RangeRequestHandler
 
 engine=LoopEngine();lock=threading.Lock()
 
@@ -16,21 +17,24 @@ def exact(stream,n):
         data.extend(part)
     return bytes(data)
 
-class Handler(SimpleHTTPRequestHandler):
+class Handler(RangeRequestHandler):
     protocol_version='HTTP/1.1'
     def setup(self):
         super().setup()
         self.connection.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
     def __init__(self,*args,**kwargs):super().__init__(*args,directory='/work',**kwargs)
+    def translate_path(self,path):
+        route=path.split('?')[0]
+        if route=='/avatar/video':return str(engine.idle_video_path)
+        if route=='/avatar/poster':return str(engine.idle_poster_path)
+        return super().translate_path(path)
     def do_GET(self):
         path=self.path.split('?')[0]
         if path in ('/avatar/video','/avatar/poster'):
-            asset=engine.idle_video_path if path=='/avatar/video' else engine.idle_poster_path
-            self.path=str(asset).removeprefix('/work')
             return super().do_GET()
         if self.path.split('?')[0] in ('/','/health'):
             if self.path.split('?')[0]=='/health':
-                data=json.dumps({'ready':True,'checkpoint':'retrain_20260929/best.pth','base':engine.manifest,'modes':MODES,'packet_ms':100,'load_seconds':engine.load_seconds,'stream_shape_warmup_seconds':engine.stream_shape_warmup_seconds,'teeth_modes':['model','new'] if engine.teeth is not None else ['model']}).encode();mime='application/json'
+                data=json.dumps({'ready':True,'checkpoint':str(engine.checkpoint_path),'character':engine.assets.name,'base':engine.manifest,'modes':MODES,'packet_ms':100,'load_seconds':engine.load_seconds,'stream_shape_warmup_seconds':engine.stream_shape_warmup_seconds,'teeth_modes':['model','new'] if engine.teeth is not None else ['model']}).encode();mime='application/json'
             else:data=Path('/lab/loop.html').read_bytes();mime='text/html; charset=utf-8'
             self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
         if self.path!='/ws':return super().do_GET()

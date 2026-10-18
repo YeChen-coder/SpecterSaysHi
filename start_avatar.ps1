@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $avatarSettings = @{}
 $envPath = Join-Path $PSScriptRoot '.env'
 if (Test-Path -LiteralPath $envPath) {
@@ -20,12 +20,17 @@ $backend = (Get-AvatarSetting 'SPECTER_AVATAR_BACKEND' 'dh_live').Trim().ToLower
 Push-Location -LiteralPath $PSScriptRoot
 try {
     if ($backend -eq 'feathertalk') {
-        # EN: Replace only the lab loop process so both pages share one GPU model.
-        # 中文：仅替换实验循环服务进程，让两个页面共享同一份 GPU 模型。
+        $character = (Get-AvatarSetting 'SPECTER_AVATAR_CHARACTER' 'gentleman').Trim().ToLowerInvariant()
+        if ($character -notin @('gentleman', 'qinche')) { throw 'SPECTER_AVATAR_CHARACTER must be gentleman or QinChe' }
+        # Each character owns its runtime, image and tuning variables.
         $labCompose = Join-Path $PSScriptRoot 'feathertalk_lab\compose.yaml'
         & docker compose -f $labCompose stop loop
         if ($LASTEXITCODE -ne 0) { throw 'Could not stop the standalone FeatherTalk loop service' }
-        & docker compose up -d --build --wait --wait-timeout 120 feathertalk
+        $selectedService = if ($character -eq 'qinche') { 'feathertalk-qinche' } else { 'feathertalk' }
+        $otherService = if ($character -eq 'qinche') { 'feathertalk' } else { 'feathertalk-qinche' }
+        & docker compose stop $otherService
+        if ($LASTEXITCODE -ne 0) { throw "Could not stop the other character service: $otherService" }
+        & docker compose up -d --build --wait --wait-timeout 180 $selectedService
     } elseif ($backend -eq 'dh_live') {
         $model = (Get-AvatarSetting 'SPECTER_DH_LIVE_MODEL' 'mini').Trim().ToLowerInvariant()
         if ($model -eq 'full') { & docker compose up -d dh-live-full }

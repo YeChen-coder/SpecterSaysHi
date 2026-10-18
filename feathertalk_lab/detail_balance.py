@@ -6,8 +6,10 @@ import cv2,numpy as np
 class DetailBalance:
     def __init__(self,engine):
         self.boxes=engine.bboxes;self.masks=[]
-        for x1,y1,x2,y2 in self.boxes:
-            mask=cv2.resize(engine.alpha[:,:,0],(int(x2-x1),int(y2-y1)))
+        for index,(x1,y1,x2,y2) in enumerate(self.boxes):
+            masks=getattr(engine,'frame_alphas',None)
+            alpha=engine.alpha if masks is None else masks[index]
+            mask=cv2.resize(alpha[:,:,0],(int(x2-x1),int(y2-y1)))
             # Do not sharpen the upper part around the nose / cheeks strongly.
             yy=np.linspace(0,1,mask.shape[0])[:,None]
             mask*=np.clip((yy-.22)/.20,0,1)
@@ -33,11 +35,11 @@ class DetailBalance:
 class IdleAppearance:
     """Reuse original reference frames, overlay only precomputed idle patches."""
     def __init__(self,engine,root='/work/data/detail_balance'):
-        root=Path(root);self.manifest=json.loads((root/'manifest.json').read_text())
+        root=engine.assets.detail if hasattr(engine,'assets') else Path(root);self.manifest=json.loads((root/'manifest.json').read_text())
         def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
         expected={'source_base_sha256':engine.manifest['sha256'],
-                  'checkpoint_sha256':digest('/work/checkpoints/retrain_20260929/best.pth'),
-                  'bboxes_sha256':digest('/work/data/loop_base/bboxes.npy'),
+                  'checkpoint_sha256':digest(engine.checkpoint_path if hasattr(engine,'checkpoint_path') else '/work/checkpoints/retrain_20260929/best.pth'),
+                  'bboxes_sha256':digest(engine.assets.base/'bboxes.npy' if hasattr(engine,'assets') else '/work/data/loop_base/bboxes.npy'),
                   'patches_sha256':digest(root/'chin_patches.npy'),
                   'idle_video_sha256':digest(root/'idle.mp4')}
         if any(self.manifest.get(k)!=v for k,v in expected.items()):

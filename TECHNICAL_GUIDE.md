@@ -1,6 +1,6 @@
 # Technical Guide
 
-This is a source export of the working SpecterSaysHi system. The repository owner's narrative is in `README.md`; automated exports never create, edit, or remove that file. Runtime paths are preserved so the exported code keeps the same imports and resource lookups as the local system.
+This is a source export of the working SpecterSaysHi system. The repository owner's narrative and development logs are maintained on GitHub in `README_zh.md`, alongside `README.md`. Automated exports never create, edit, or remove root README files; remote edits take priority over private local copies. Runtime paths are preserved so the exported code keeps the same imports and resource lookups as the local system.
 
 ## System map
 
@@ -37,7 +37,7 @@ The phone bridge publishes state and supports phone commands; it does not curren
 | Memory | `session_memory.py` | Summarize sessions, consolidate notes, load context for later conversations |
 | Phone | `android-phone/`, `phone_link.py`, `setup_phone_link.ps1` | Android usage reports, pairing and pinned TLS |
 | Avatar transport | `mini_audio_publisher.py` | Copy played 24 kHz PCM to the selected local backend |
-| Avatar rendering | `feathertalk_lab/`, `dh_live_full/`, `dh_live_mini/` | Streaming inference, compositing, idle animation and speech-to-idle transitions |
+| Avatar rendering | `feathertalk_lab/`, `feathertalk_qinche_runtime/`, `dh_live_full/`, `dh_live_mini/` | Streaming inference, compositing, idle animation and speech-to-idle transitions |
 
 `feathertalk_lab` contains production rendering code despite its name. Independent BitHuman and SyncTalk experiments are excluded from this export.
 
@@ -94,13 +94,16 @@ Source code is included; trained identities, original images, training clips, ch
 
 | Backend | Included implementation | Local resources required |
 | --- | --- | --- |
-| FeatherTalk | `specter_server.py`, bounded realtime session, loop engine, resampler, detail and teeth filters, preparation/training scripts | Upstream checkout, audio/landmark weights, `data/base.jpg`, `data/base.lms`, `checkpoints/retrain_20260929/best.pth`, prepared `data/loop_base/` |
+| FeatherTalk / Gentleman | `specter_server.py`, bounded realtime session, loop engine, resampler, detail and teeth filters, preparation/training scripts | Upstream checkout, audio/landmark weights, `data/base.jpg`, `data/base.lms`, `checkpoints/retrain_20260929/best.pth`, prepared `data/loop_base/` |
+| FeatherTalk / QinChe | Independent native-face runtime, frozen upstream source, asset fingerprints and clean training references | Approved checkpoint, source media, cached frames and 500-frame timeline, poster, audio encoder weights, original local base image; see [QinChe runtime guide](feathertalk_qinche_runtime/README.zh-CN.md) |
 | DH Live Full | Server, reference preparation, full-frame display, idle and mouth restoration | DH model weights in `DH_live_From_baiduyun/checkpoint/`, prepared `dh_live_full/avatar/` |
 | DH Live Mini | Audio inference service, independent image renderer and browser player | DH weights, detector/landmark weights, input video and prepared `dh_live_mini/assets/` |
 
 Some training and resource paths retain dated names because they are the actual working implementation. These are local resource contracts, not included artifacts. FeatherTalk's `new` teeth mode additionally requires `data/teeth_20260930/`; `model_idle` requires matching `data/detail_balance/` assets and validates their hashes. The examples use `model` teeth and `original` detail until these optional caches exist.
 
 ### FeatherTalk
+
+`SPECTER_AVATAR_CHARACTER=gentleman` selects the original `feathertalk` service. `QinChe` selects `feathertalk-qinche`, a separate image, process, codebase, asset mount and configuration. `SPECTER_FEATHERTALK_*` tune Gentleman only; QinChe reads `SPECTER_QINCHE_MODE/BUFFER_MS` and does not inherit teeth, chin, sharpening or settling changes. The startup script stops the other service before claiming the shared display ports.
 
 `feathertalk_lab/bootstrap.ps1` obtains the pinned upstream source and builds the base worker image. It does not acquire every model or prepare your identity. Check upstream instructions for their pretrained resources.
 

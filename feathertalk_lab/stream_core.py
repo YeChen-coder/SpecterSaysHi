@@ -13,14 +13,14 @@ from face_utils import reshape_audio_feat,gather_audio_window
 MODES={'fast':{'lookahead':0,'chunk_ms':40},'balanced':{'lookahead':10,'chunk_ms':80},'quality':{'lookahead':25,'chunk_ms':160}}
 
 class Engine:
-    def __init__(self,checkpoint='/work/checkpoints/last.pth',device='cuda'):
+    def __init__(self,checkpoint='/work/checkpoints/last.pth',device='cuda',base_image='/work/data/base.jpg',base_landmarks='/work/data/base.lms'):
         torch.set_num_threads(4); self.device=torch.device(device)
         if device=='cuda':torch.cuda.set_per_process_memory_fraction(.45)
         begin=time.perf_counter()
         self.audio=load_feather_hubert('/opt/FeatherTalk/feather_hubert.pth',self.device)
         self.visual=load_model(checkpoint,self.device)
-        self.image=cv2.imread('/work/data/base.jpg')
-        self.image_input,self.crop,self.bbox,self.original_size=prepare_model_input(self.image,'/work/data/base.lms',self.device)
+        self.image=cv2.imread(str(base_image))
+        self.image_input,self.crop,self.bbox,self.original_size=prepare_model_input(self.image,str(base_landmarks),self.device)
         # Warm up separately from session timing.
         with torch.inference_mode():
             self.visual(self.image_input,torch.zeros(1,40,1024,device=self.device))

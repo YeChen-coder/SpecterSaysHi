@@ -7,12 +7,18 @@ from teeth_geometry import INNER,curves,jaw_transform,mesh_points,mouth_stats
 class NewTeethRestorer:
     def __init__(self,root='/work/data/teeth_20260930'):
         root=Path(root);self.manifest=json.loads((root/'manifest.json').read_text())
+        self.repair_mode=self.manifest.get('repair_mode','fixed_cavity')
+        if self.repair_mode not in {'fixed_cavity','enamel_only','enamel_stable','rigid_upper'}:raise ValueError('Unknown teeth repair mode')
         self.donor_id=self.manifest['selected_donor'];metadata=self.manifest['candidates'][self.donor_id]
-        asset=np.load(root/metadata['asset']);self.donor=asset['image'];self.points=asset['points']
+        asset=np.load(root/metadata['asset']);self.donor=asset['image'];self.original_donor=self.donor.copy();self.points=asset['points']
         self.base_mesh=np.load(root/'base_mesh.npy');self.rois=np.load(root/'base_rois.npy')
         mask=np.zeros(self.donor.shape[:2],np.uint8);cv2.fillPoly(mask,[np.rint(self.points[list(INNER)]).astype(np.int32)],255)
         pixels=self.donor[mask>0];brightness=pixels.mean(axis=1)
         self.background=pixels[brightness<=np.percentile(brightness,25)].mean(axis=0).astype(np.float32)
+        self.rigid=None
+        if self.repair_mode=='rigid_upper':
+            from rigid_upper_jaw import RigidUpperJaw
+            self.rigid=RigidUpperJaw(self.original_donor,self.points,self.base_mesh,self.background,self.manifest.get('rigid_upper'))
         yy,xx=np.indices(mask.shape);top,bottom=curves(self.points,np.arange(mask.shape[1]))
         width=float(self.points[308,0]-self.points[78,0])
         # Keep the upper tooth band. Lower teeth belong to the moving jaw and
@@ -24,7 +30,7 @@ class NewTeethRestorer:
         self.reset()
 
     def reset(self):
-        self.mesh.reset();self.visibility=0.;self.records=[]
+        self.mesh.reset();self.visibility=0.;self.records=[];self.enamel_state={}
 
     def process(self,image,index):
         begin=time.perf_counter();points=mesh_points(self.mesh,image,tuple(self.rois[index]))
@@ -33,12 +39,24 @@ class NewTeethRestorer:
         stats=mouth_stats(image,points)
         if stats is None:self.visibility=0.;return self.finish(image,row,begin)
         row.update(stats)
+        if self.repair_mode=='rigid_upper':
+            if self.rigid is None:
+                from rigid_upper_jaw import RigidUpperJaw
+                self.rigid=RigidUpperJaw(self.original_donor,self.points,self.base_mesh,self.background,self.manifest.get('rigid_upper'))
+            row.update(self.rigid.process(image,points,index))
+            return self.finish(image,row,begin)
         opening=float(np.clip((stats['opening']-.025)/.065,0,1))
         visible=float(np.clip((stats['tooth_fraction']-.035)/.12,0,1))*opening
-        self.visibility=.7*visible+.3*self.visibility
-        strength=.85*min(self.visibility,opening)
+        stable=self.repair_mode=='enamel_stable'
+        rate=.22 if stable else .7
+        self.visibility=rate*visible+(1-rate)*self.visibility
+        strength=(.6 if stable else .85)*min(self.visibility,opening)
         row['closed']=stats['opening']<=.025;row['strength']=strength
         if strength<.02:return self.finish(image,row,begin)
+        if self.repair_mode in {'enamel_only','enamel_stable'}:
+            from upper_teeth_refine import refine_upper_enamel
+            row.update(refine_upper_enamel(image,points,self.donor,self.points,self.transforms[index],strength,state=self.enamel_state if stable else None))
+            return self.finish(image,row,begin)
         polygon=points[list(INNER)]
         x0,y0=np.maximum(np.floor(polygon.min(axis=0)-2).astype(int),0)
         x1,y1=np.minimum(np.ceil(polygon.max(axis=0)+3).astype(int),image.shape[1::-1])
@@ -69,7 +87,7 @@ class NewTeethRestorer:
 
     def status(self):
         times=[row['ms'] for row in self.records]
-        return {'donor':self.manifest['candidates'][self.donor_id],'frames':len(self.records),
+        return {'donor':self.manifest['candidates'][self.donor_id],'repair_mode':self.repair_mode,'frames':len(self.records),
                 'restored_frames':sum(row['replaced'] for row in self.records),
                 'tracking_misses':sum(row['tracking_miss'] for row in self.records),
                 'closed_frames':sum(row['closed'] for row in self.records),

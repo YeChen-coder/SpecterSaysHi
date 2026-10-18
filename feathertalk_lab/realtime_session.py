@@ -18,12 +18,14 @@ class RealtimeLoopSession:
         self.base_frame = self.next_frame = self.received_samples = 0
         self.teeth_restored_frames = 0
         self.last_index = self.last_image = None
+        self.peak_pcm_samples = 0
         engine.teeth_mode = teeth
         engine.begin(start_frame)
 
     def push(self, pcm, final=False):
         self.received_samples += len(pcm)
         self.pcm = np.concatenate([self.pcm, np.asarray(pcm, dtype=np.float32)])
+        self.peak_pcm_samples = max(self.peak_pcm_samples, len(self.pcm))
         total = max(0, (self.received_samples - 80) // 640)
         if final:
             total = self.received_samples // 640

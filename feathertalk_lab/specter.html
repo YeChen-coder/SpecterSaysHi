@@ -34,6 +34,10 @@
     let previousUrl = null;
     let rendering = false;
     document.body.dataset.mode = 'idle';
+    fetch('/health').then(response => response.json()).then(health => {
+      document.title = 'Specter × FeatherTalk · ' + health.character;
+      document.body.dataset.character = health.character;
+    }).catch(() => {});
     const frameCount = () => Math.max(1, Math.round((idle.duration || 30.08) * fps));
 
     idle.addEventListener('loadeddata', () => {

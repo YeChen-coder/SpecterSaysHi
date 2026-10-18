@@ -44,3 +44,17 @@ android-phone/app/build/
 *.npy
 *.pkl
 *.apk
+
+# Personal identity media, credentials and generated artifacts never belong in Git.
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.mp3
+*.m4a
+*.flac
+*.pfx
+*.p12
+*.key
+*.pem
+*.sqlite*

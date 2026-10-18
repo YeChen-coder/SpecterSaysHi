@@ -7,12 +7,13 @@ import time
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from realtime_session import RealtimeLoopSession
 from idle_transition import IdleTransition
 from streaming_resampler import StreamingResampler24To16
+from frame_stream import iter_frames
 from loop_server import engine, lock, serve
 
 MODE = os.getenv("FEATHERTALK_MODE", "fast").strip().lower()
@@ -41,6 +42,8 @@ frames_rendered = 0
 teeth_restored_frames = 0
 settle_frames_rendered = 0
 last_error = ""
+peak_pcm_samples = 0
+current_pcm_samples = 0
 
 
 @app.get("/")
@@ -53,9 +56,63 @@ def video():
     return FileResponse(engine.idle_video_path, media_type="video/mp4", headers={"Cache-Control": "no-cache"})
 
 
+@app.get("/preview")
+def preview():
+    if engine.assets.key != 'qinche':
+        return {"character": engine.assets.name, "message": "Set SPECTER_AVATAR_CHARACTER=QinChe to use this preview"}
+    return FileResponse('/characters/qinche/preview.html', headers={"Cache-Control": "no-store"})
+
+
+@app.get("/character-test.wav")
+def character_test_audio():
+    path=engine.assets.data/'test_speech.wav' if engine.assets.key=='qinche' else engine.assets.data/'speech.wav'
+    return FileResponse(path,media_type='audio/wav')
+
+
+@app.get('/quality-review')
+def quality_review():
+    if engine.assets.key!='qinche':raise HTTPException(status_code=404)
+    return FileResponse('/characters/qinche/upper_lip_review.html',headers={'Cache-Control':'no-store'})
+
+
+@app.get('/quality-review/{filename}')
+def quality_review_media(filename: str):
+    if engine.assets.key!='qinche' or filename not in {'comparison.mp4','comparison.jpg','native_material.jpg'}:
+        raise HTTPException(status_code=404)
+    return FileResponse(engine.assets.data.parent/'output/upper_lip_20261013'/filename,headers={'Cache-Control':'no-cache'})
+
+
+@app.get('/teeth-stability')
+def tooth_stability_review():
+    if engine.assets.key!='qinche':raise HTTPException(status_code=404)
+    return FileResponse('/characters/qinche/tooth_stability_review.html',headers={'Cache-Control':'no-store'})
+
+
+@app.get('/teeth-stability/{filename}')
+def tooth_stability_media(filename: str):
+    if engine.assets.key!='qinche' or filename not in {'comparison.mp4','comparison.jpg'}:
+        raise HTTPException(status_code=404)
+    return FileResponse(engine.assets.data.parent/'output/tooth_stability_20261013'/filename,headers={'Cache-Control':'no-cache'})
+
+
 @app.get("/poster")
 def poster():
     return FileResponse(engine.idle_poster_path, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+
+@app.get('/upper-jaw-review')
+def rigid_upper_review():
+    if engine.assets.key!='qinche':raise HTTPException(status_code=404)
+    return FileResponse('/characters/qinche/rigid_upper_review.html',headers={'Cache-Control':'no-store'})
+
+
+@app.get('/upper-jaw-review/{filename}')
+def rigid_upper_media(filename: str):
+    files={'comparison.mp4':'calibrated/comparison.mp4','comparison.jpg':'calibrated/comparison.jpg',
+           'i_think_portrait.mp4':'validation/i_think_portrait.mp4','i_think_comparison.mp4':'validation/i_think_comparison.mp4',
+           'unseen_voice_portrait.mp4':'validation/unseen_voice_portrait.mp4'}
+    if engine.assets.key!='qinche' or filename not in files:raise HTTPException(status_code=404)
+    return FileResponse(engine.assets.data.parent/'output/rigid_upper_20261016'/files[filename],headers={'Cache-Control':'no-cache'})
 
 
 @app.get("/health")
@@ -63,10 +120,18 @@ def health():
     return {"ok": True, "model": "FeatherTalk loop", "publisher": publisher is not None,
             "viewers": len(viewers), "speech_active": active, "mode": MODE,
             "buffer_ms": BUFFER_MS, "teeth_mode": TEETH,
-            "checkpoint": "retrain_20260929/best.pth", "base_frames": engine.count,
+            "teeth_repair_mode": engine.teeth.repair_mode if engine.teeth else None,
+            "teeth_repair_config": engine.teeth.rigid.settings if engine.teeth and engine.teeth.repair_mode=='rigid_upper' and engine.teeth.rigid else None,
+            "checkpoint": str(engine.checkpoint_path), "base_frames": engine.count,
+            "character": engine.assets.name, "characters": ["gentleman", "QinChe"],
+            "width": engine.manifest['width'], "height": engine.manifest['height'],
             "frames_rendered": frames_rendered, "teeth_restored_frames": teeth_restored_frames,
             "settle_ms": SETTLE_FRAMES * 40, "settle_frames_rendered": settle_frames_rendered,
             "detail_profile": engine.detail_profile, "detail_last_ms": engine.detail_last_ms,
+            "frame_delivery": "incremental", "history_limit_ms": 4000,
+            "peak_audio_history_ms": peak_pcm_samples / 16,
+            "current_audio_history_ms": current_pcm_samples / 16,
+            "stream_shape_warmup_seconds": engine.stream_shape_warmup_seconds,
             "error": last_error}
 
 
@@ -92,18 +157,18 @@ async def broadcast(*messages):
 
 
 def infer(session, raw, final=False):
-    global frames_rendered, teeth_restored_frames
+    global frames_rendered, teeth_restored_frames, peak_pcm_samples, current_pcm_samples
     pcm = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
-    images = []
     restored_before = session.teeth_restored_frames
     for index, image in session.push(pcm, final):
         ok, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])
         if not ok:
             raise RuntimeError("FeatherTalk JPEG encoding failed")
-        images.append((index, jpeg.tobytes()))
         frames_rendered += 1
+        yield index, jpeg.tobytes()
     teeth_restored_frames += session.teeth_restored_frames - restored_before
-    return images
+    peak_pcm_samples = max(peak_pcm_samples, session.peak_pcm_samples)
+    current_pcm_samples = len(session.pcm)
 
 
 def infer_settle(transition):
@@ -174,8 +239,7 @@ async def publish(ws: WebSocket):
 
     async def render(raw, final=False):
         global latest
-        images = await asyncio.to_thread(infer, session, raw, final)
-        for index, image in images:
+        async for index, image in iter_frames(infer(session, raw, final)):
             latest = (index, image)
             await broadcast({"type": "frame", "index": index}, image)
 
@@ -231,7 +295,10 @@ async def publish(ws: WebSocket):
                 converted = resampler.push_pcm(bytes(pending))
                 pending.clear()
                 await render(converted)
-            if session is not None and time.monotonic() - last_audio > .24:
+            # Only end speech after a receive timeout. A slow inference packet
+            # can take >240 ms while subsequent audio is already queued in the
+            # socket; processing time must not split that continuous speech.
+            if session is not None and event is None and time.monotonic() - last_audio > .24:
                 await render(resampler.finish(), final=True)
                 await begin_settle()
             if settling is not None and time.monotonic() >= settle_next_at:
@@ -290,4 +357,6 @@ if __name__ == "__main__":
     # EN: The original experiment keeps port 8080 and shares its GPU/model lock.
     # 中文：原实验页继续使用 8080，与实时桥接共享同一份 GPU 模型和互斥锁。
     threading.Thread(target=serve, daemon=True).start()
-    uvicorn.run(app, host="0.0.0.0", port=8081, log_level="info")
+    # JPEG is already compressed. Recompressing each full frame separately for
+    # every viewer consumes CPU and can accumulate delay on detailed avatars.
+    uvicorn.run(app, host="0.0.0.0", port=8081, log_level="info",ws_per_message_deflate=False)

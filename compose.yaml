@@ -18,6 +18,7 @@ services:
       FEATHERTALK_TEETH_MODE: ${SPECTER_FEATHERTALK_TEETH_MODE:-new}
       FEATHERTALK_SETTLE_MS: ${SPECTER_FEATHERTALK_SETTLE_MS:-320}
       FEATHERTALK_DETAIL_PROFILE: ${SPECTER_FEATHERTALK_DETAIL_PROFILE:-model_idle}
+      FEATHERTALK_CHARACTER: gentleman
     volumes:
       - ./feathertalk_lab/data:/work/data:ro
       - ./feathertalk_lab/checkpoints:/work/checkpoints:ro
@@ -27,6 +28,30 @@ services:
       - "127.0.0.1:18986:8080"
       - "127.0.0.1:18988:8081"
     command: ["python", "/lab/specter_server.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 90s
+      retries: 12
+
+  feathertalk-qinche:
+    profiles: ["feathertalk-qinche"]
+    image: feathertalk-qinche-approved:20261017
+    build:
+      context: ./feathertalk_qinche_runtime
+    gpus: all
+    restart: unless-stopped
+    mem_limit: 4g
+    cpus: 4
+    environment:
+      QINCHE_MODE: ${SPECTER_QINCHE_MODE:-fast}
+      QINCHE_BUFFER_MS: ${SPECTER_QINCHE_BUFFER_MS:-100}
+    volumes:
+      - ./feathertalk_qinche_clean_20261016:/assets:ro
+    ports:
+      - "127.0.0.1:18986:8080"
+      - "127.0.0.1:18988:8081"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=2)"]
       interval: 10s
