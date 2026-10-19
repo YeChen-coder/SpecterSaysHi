@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="guard_label">Specter 睡前封锁</string>
+    <string name="guard_description">睡觉时间由 Specter 管：封锁期间把不在放行名单里的应用弹回桌面，必要时自动锁屏。只读取当前前台应用的包名，不读取屏幕内容。电脑上的解锁脚本可以随时解除。</string>
+</resources>

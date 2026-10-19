@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agents import Agent, ModelSettings, RunConfig, Runner, WebSearchTool, function_tool
 from agents.exceptions import ModelTimeoutError
@@ -27,6 +27,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 from echo import SpeakerReference
 from mini_audio_publisher import AvatarAudioPublisher, avatar_enabled
 from foci_prompt import foci_agent_instructions, foci_decline_phrase, foci_opening_prompt
+from nudge_prompt import nudge_agent_instructions, nudge_opening_prompt
 from session_control import (
     clear_active, close_requested, explicit_close_phrase, publish_active, publish_close_status,
 )
@@ -66,14 +67,57 @@ def transcript_logging_enabled() -> bool:
     }
 
 
-def barge_in_enabled() -> bool:
-    """Read the reversible hands-free interruption switch.
+def barge_in_mode() -> str:
+    """How the owner can interrupt him: local (default), server, or off.
 
-    打断开关同时控制服务端 VAD 与本地麦克风上行，避免只打开一半功能。
+    中文：打断方式：local（默认，本机判断）、server（服务端 VAD，会听到自己的回声）、off。
+    local: while he speaks the microphone is not uploaded, so he cannot hear
+    his own echo; a clearly louder voice than the echo (after echo cancelling)
+    for about 0.3 s stops him locally and the speech is then sent on.
     """
-    return os.getenv("SPECTER_BARGE_IN_ENABLED", "false").strip().lower() in {
-        "1", "true", "yes", "on",
-    }
+    mode = os.getenv("SPECTER_BARGE_IN_MODE", "").strip().lower()
+    if mode in {"local", "server", "off"}:
+        return mode
+    legacy = os.getenv("SPECTER_BARGE_IN_ENABLED", "").strip().lower()
+    return "server" if legacy in {"1", "true", "yes", "on"} else "local"
+
+
+def barge_in_enabled() -> bool:
+    """Server-side interruption (Realtime VAD cancels the reply)."""
+    return barge_in_mode() == "server"
+
+
+class LocalBargeIn:
+    """Tell the owner's voice from his own echo by loudness after echo cancelling.
+
+    中文：在回声消除之后按音量区分：持续明显高于回声基线，才算用户插话。
+    The first second of each playback only learns the echo level (the echo
+    canceller is still converging then); after that, 3 consecutive 100 ms
+    chunks louder than max(min_rms, factor x baseline) count as an interruption.
+    """
+
+    def __init__(self, warmup_s: float | None = None, factor: float | None = None,
+                 min_rms: float | None = None, chunks: int | None = None) -> None:
+        self.warmup_s = warmup_s if warmup_s is not None else float(os.getenv("SPECTER_BARGE_WARMUP_MS", "1000")) / 1000
+        self.factor = factor if factor is not None else float(os.getenv("SPECTER_BARGE_FACTOR", "3.0"))
+        self.min_rms = min_rms if min_rms is not None else float(os.getenv("SPECTER_BARGE_MIN_RMS", "500"))
+        self.chunks = chunks if chunks is not None else int(os.getenv("SPECTER_BARGE_CHUNKS", "3"))
+        self.reset(0.0)
+
+    def reset(self, now: float) -> None:
+        self.started, self.baseline, self.loud, self.peak = now, 0.0, 0, 0.0
+
+    def observe(self, rms: float, now: float) -> bool:
+        self.peak = max(self.peak, rms)
+        if now - self.started < self.warmup_s:
+            self.baseline = max(self.baseline * 0.9 + rms * 0.1, rms * 0.5)
+            return False
+        if rms > max(self.min_rms, self.factor * self.baseline):
+            self.loud += 1
+        else:
+            self.loud = 0
+            self.baseline = self.baseline * 0.95 + rms * 0.05
+        return self.loud >= self.chunks
 
 
 def echo_cancellation_enabled() -> bool:
@@ -112,8 +156,8 @@ def agent_instructions(owner: str, has_camera: bool, memory_context: str = "") -
         "latest question directly, and use relevant background naturally. If an old memory conflicts "
         "with what they say now, trust the current statement. Ask a brief clarifying question when "
         "the request or audio is unclear. For plans, identify the next useful step and ask only for "
-        "information needed to proceed. Keep ordinary replies concise; expand when the user asks "
-        "for detail. The opening greeting is requested separately, once per session. After it, "
+        "information needed to proceed. Keep each spoken reply to one to three short sentences; "
+        "expand only when the user asks for detail or a list. Never monologue. The opening greeting is requested separately, once per session. After it, "
         "do not greet or reintroduce yourself again.\n\n"
         "# Session controls\nIf the user asks to end this conversation, stop listening, or close "
         "the current session (for example, '结束这次对话', '别再听了', or 'stop listening', or 'end this conversation'), "
@@ -264,15 +308,21 @@ def session_settings() -> dict[str, Any]:
     }
 
 
-def session_time_limits(opening_only: bool) -> tuple[float, float]:
+def session_time_limits(opening_only: bool, kind: str = "foci_checkin") -> tuple[float, float]:
     """Read inactivity and absolute lifetime limits from the local settings.
 
-    中文：读取空闲和最长会话时限；FOCI 尚未进入对话的开场沿用独立默认值。
+    中文：读取空闲和最长会话时限；FOCI 关怀与情境提醒尚未进入对话的开场各有独立默认值。
     """
+    opening_env, opening_default = {
+        "nudge": ("SPECTER_NUDGE_SESSION_IDLE_SECONDS", "20"),
+        # EN: A greeting nobody answers should not leave the microphone open.
+        # 中文：打招呼后没人接话，就不要一直开着麦克风听。
+        "greeting": ("SPECTER_GREETING_SESSION_IDLE_SECONDS", "15"),
+        "wake": ("SPECTER_GREETING_SESSION_IDLE_SECONDS", "15"),
+    }.get(kind, ("SPECTER_FOCI_SESSION_IDLE_SECONDS", "15"))
     idle = float(os.getenv(
-        "SPECTER_FOCI_SESSION_IDLE_SECONDS" if opening_only
-        else "SPECTER_SESSION_IDLE_SECONDS",
-        "15" if opening_only else "300",
+        opening_env if opening_only else "SPECTER_SESSION_IDLE_SECONDS",
+        opening_default if opening_only else "300",
     ))
     # EN: The FOCI opening-only cap is separate from the normal greeting cap.
     # 中文：FOCI 开场未接话时的上限独立于普通人脸问候会话的最长时限。
@@ -308,13 +358,33 @@ class RealtimeConversation:
         control_dir: Path | None = None, memory_path: Path | None = None,
         memory_saved_event: threading.Event | None = None,
         session_kind: str = "greeting", foci_context: str = "",
+        nudge: dict[str, Any] | None = None,
+        interrupt: Callable[[], str | None] | None = None,
+        wake_text: str = "",
     ):
-        if session_kind not in {"greeting", "foci_checkin"}:
+        if session_kind not in {"greeting", "foci_checkin", "nudge", "wake"}:
             raise ValueError(f"unknown session kind: {session_kind}")
+        if (session_kind == "nudge") != (nudge is not None):
+            raise ValueError("a nudge session needs exactly one nudge request")
         self.owner = owner
         self.session_kind = session_kind
         self.foci_context = foci_context
-        self.frame_source = frame_source if session_kind == "greeting" else None
+        # EN: Situation-engine request and the answer the agent records for it.
+        # 中文：情境引擎的提醒请求，以及 Agent 为其记录的用户回应。
+        self.nudge = nudge
+        self.nudge_decision: tuple[str, int | None] | None = None
+        self.nudge_reply_started = False
+        self.greeting_reply_started = False
+        self.audio_bytes_by_item: dict[str, int] = {}
+        # EN: Asked once a second; a returned reason ends the session at once
+        # (another app is dictating, or the camera cover was closed).
+        # 中文：每秒询问一次；返回原因即立刻结束（别的程序在听写，或盖子被关上）。
+        self.interrupt = interrupt
+        self.nudge_decline_heard = False
+        self.frame_source = frame_source if session_kind in {"greeting", "wake"} else None
+        # EN: Whatever the owner said right after "Hey Specter", answered directly.
+        # 中文：用户在 "Hey Specter" 之后紧接着说的话，开场直接回答。
+        self.wake_text = wake_text.strip()[:500]
         # EN: A one-shot household alert temporarily owns the shared speaker.
         # 中文：一次性家庭提醒播放时，实时会话暂时让出扬声器并静音麦克风上行。
         self.external_audio_active = external_audio_active or threading.Event()
@@ -329,8 +399,14 @@ class RealtimeConversation:
         self.speaker_reference = SpeakerReference()
         self.avatar_publisher = AvatarAudioPublisher() if avatar_enabled() else None
         self.playback_generation = 0
-        self.allow_barge_in = barge_in_enabled()
-        self.use_aec = self.allow_barge_in and echo_cancellation_enabled()
+        self.barge_mode = barge_in_mode()
+        self.allow_barge_in = self.barge_mode == "server"
+        # EN: Echo cancelling also serves local interruption, so it no longer
+        # depends on server-side barge-in (turning that off had disabled it).
+        # 中文：本机打断也需要回声消除；之前关掉服务端插话时把回声消除一起关了。
+        self.use_aec = self.barge_mode in {"server", "local"} and echo_cancellation_enabled()
+        self.local_barge = LocalBargeIn() if self.barge_mode == "local" else None
+        self.barged_in = False
         self.playback_started_at: float | None = None
         self.started = self.last_activity = time.monotonic()
         self.response_active = False
@@ -383,6 +459,42 @@ class RealtimeConversation:
 
         return end_conversation
 
+    def make_reminder_response_tool(self):
+        """Let the nudge agent record accept / snooze / decline for the engine."""
+
+        @function_tool
+        async def respond_to_reminder(decision: str, snooze_minutes: int | None = None) -> str:
+            """Record the user's answer to this reminder.
+
+            decision: 'accept', 'snooze' (with snooze_minutes 5-60), or 'decline'.
+            """
+            decision = decision.strip().lower()
+            if decision not in {"accept", "snooze", "decline"}:
+                return "Use decision 'accept', 'snooze', or 'decline'."
+            minutes = None
+            if decision == "snooze":
+                if not isinstance(snooze_minutes, int) or isinstance(snooze_minutes, bool):
+                    return "A snooze needs snooze_minutes between 5 and 60."
+                minutes = min(60, max(5, snooze_minutes))
+            self.nudge_decision = (decision, minutes)
+            LOG.info("Nudge reply recorded: %s%s", decision, f" {minutes} min" if minutes else "")
+            if minutes is not None:
+                return f"Recorded. You will check again in {minutes} minutes. Confirm briefly, then end."
+            return "Recorded. Respond briefly, then end the conversation."
+
+        return respond_to_reminder
+
+    def nudge_outcome(self) -> tuple[str, int | None]:
+        """Map the session to an engine outcome: accepted/snoozed/declined/ignored."""
+        if self.nudge_decision is not None:
+            decision, minutes = self.nudge_decision
+            return {"accept": "accepted", "snooze": "snoozed", "decline": "declined"}[decision], minutes
+        if self.nudge_decline_heard:
+            return "declined", None
+        # EN: Any real reply counts as engagement, so it does not trigger backoff.
+        # 中文：只要用户真正回应过就算有互动，不触发退避。
+        return ("accepted" if self.nudge_reply_started else "ignored"), None
+
     def _finish_voice_close_if_ready(self) -> None:
         if (
             self.voice_close_requested_at is not None
@@ -424,6 +536,17 @@ class RealtimeConversation:
             return
         try:
             jpeg = await asyncio.to_thread(self.frame_source.latest_jpeg)
+            # EN: A black frame (cover closed, lights off) shows nothing; sending it
+            # once made him say he could see the owner.
+            # 中文：全黑画面什么也看不到；之前发了黑画面，他却说"看到你了"。
+            from availability import frame_brightness
+
+            try:
+                dark = frame_brightness(jpeg) < float(os.getenv("SPECTER_COVER_DARK_BELOW", "25"))
+            except (OSError, ValueError):
+                dark = False  # an undecodable frame is not evidence of darkness
+            if dark:
+                raise VisualUnavailable("camera covered or too dark")
         except VisualUnavailable as exc:
             LOG.warning("Visual frame unavailable: %s", exc)
             if self.latest_image_id:
@@ -489,6 +612,12 @@ class RealtimeConversation:
                 LOG.info("FOCI check-in decline recognized")
             elif not explicit_close_phrase(transcript):
                 self.foci_conversation_started = True
+        if self.session_kind in {"greeting", "wake"} and not explicit_close_phrase(transcript):
+            self.greeting_reply_started = True
+        if self.session_kind == "nudge":
+            self.nudge_reply_started = True
+            if foci_decline_phrase(transcript):
+                self.nudge_decline_heard = True
         if explicit_close_phrase(transcript):
             self.explicit_close_transcript_at = time.monotonic()
             LOG.info("Direct voice close phrase recognized in user transcription")
@@ -507,12 +636,23 @@ class RealtimeConversation:
             if not self.speaker_busy:
                 self.playback_started_at = time.monotonic()
             self.speaker_busy = True
+            # EN: Per-item audio length, to tell a doubled reply from a doubled event.
+            # 中文：按片段统计音频长度，用来区分"模型说了两遍"和"同一事件收到两次"。
+            key = str(event.item_id)[-6:]
+            self.audio_bytes_by_item[key] = self.audio_bytes_by_item.get(key, 0) + len(event.audio.data)
             self.audio_queue.put_nowait((
                 self.playback_generation, event.item_id,
                 event.content_index, event.audio.data,
             ))
             return
         if event.type == "audio_interrupted":
+            self._drop_playback("Assistant audio interrupted")
+            return
+        if event.type == "tool_start":
+            self.tools_in_progress += 1
+            LOG.info("Agent tool started")
+            return
+        if event.type == "__never__":
             # EN: In a WebSocket session the SDK cannot stop our PortAudio queue for us.
             # 中文：SDK 无法自动清空本地扬声器队列；旧语音必须立刻丢弃。
             queued_chunks = self.audio_queue.qsize()
@@ -548,12 +688,18 @@ class RealtimeConversation:
             return
         raw = event.data
         if raw.type == "turn_started":
+            self.barged_in = False
             self.response_turns += 1
             self.response_active = True
             self.response_request_pending = False
             self.last_activity = time.monotonic()
             LOG.info("Assistant response started")
         elif raw.type == "turn_ended":
+            if self.audio_bytes_by_item:
+                LOG.info("Response audio by item: %s", ", ".join(
+                    f"..{key} {size / 48:.0f} ms" for key, size in self.audio_bytes_by_item.items()
+                ))
+                self.audio_bytes_by_item = {}
             self.response_active = False
             self.response_request_pending = False
             self.last_activity = time.monotonic()
@@ -581,12 +727,27 @@ class RealtimeConversation:
                 LOG.info("Realtime session configured")
                 self.ready.set()
                 await self._refresh_visual_context(session)
-                opening = (
-                    foci_opening_prompt(self.foci_context)
-                    if self.session_kind == "foci_checkin" else
-                    f"{self.owner} has approached. Greet them in one short, calm English sentence, "
-                    "then stop and listen.\n\n" + VOICE_STYLE
-                )
+                if self.session_kind == "foci_checkin":
+                    opening = foci_opening_prompt(self.foci_context)
+                elif self.session_kind == "nudge":
+                    opening = nudge_opening_prompt(self.nudge or {})
+                elif self.session_kind == "wake":
+                    opening = (
+                        f"{self.owner} just called you by name to start talking. "
+                        + ("" if self.frame_source is not None else
+                           "Your camera is covered right now, so you cannot see them; never say you see them. ")
+                        + (f"Right after your name they said: \"{self.wake_text}\". Answer that directly "
+                           "and naturally, without greeting them first." if self.wake_text else
+                           "Answer with a brief, natural acknowledgement of at most five words, such as "
+                           "\"Yes?\" or \"I'm here.\", then stop and listen. Do not comment on the image, "
+                           "the time, or anything else until they speak.")
+                        + "\n\n" + VOICE_STYLE
+                    )
+                else:
+                    opening = (
+                        f"{self.owner} has approached. Greet them in one short, calm English sentence, "
+                        "then stop and listen.\n\n" + VOICE_STYLE
+                    )
                 await self._request_response(
                     session, opening,
                 )
@@ -631,7 +792,9 @@ class RealtimeConversation:
                 if transcript_logging_enabled() and isinstance(speech, str):
                     LOG.info("Assistant transcript: %r", speech)
                 else:
-                    LOG.info("Assistant speech produced (%d characters)", len(speech) if isinstance(speech, str) else 0)
+                    LOG.info("Assistant speech produced (%d characters, item ..%s, output %s)",
+                             len(speech) if isinstance(speech, str) else 0,
+                             str(item_id)[-6:], data.get("output_index"))
                 self._finish_voice_close_if_ready()
                 self._finish_foci_decline_if_ready()
             elif kind == "error":
@@ -649,6 +812,34 @@ class RealtimeConversation:
         finally:
             self.stop.set()
 
+    def _drop_playback(self, reason: str) -> None:
+        """Stop his speech now: discard queued audio and reset the avatar."""
+        # EN: In a WebSocket session the SDK cannot stop our PortAudio queue for us.
+        # 中文：SDK 无法自动清空本地扬声器队列；旧语音必须立刻丢弃。
+        queued_chunks = self.audio_queue.qsize()
+        was_playing = self.speaker_busy
+        self.playback_generation += 1
+        while not self.audio_queue.empty():
+            self.audio_queue.get_nowait()
+        self.speaker_reference.clear()
+        if self.avatar_publisher:
+            self.avatar_publisher.reset()
+        self.playback_started_at = None
+        self.speaker_busy = False
+        self.last_activity = time.monotonic()
+        LOG.info("%s (speaker_busy=%s, discarded_chunks=%d)", reason, was_playing, queued_chunks)
+
+    async def _local_interrupt(self, session: Any, recent: list[bytes]) -> None:
+        """The owner spoke over him: cancel the reply, then pass their words on."""
+        self.barged_in = True
+        try:
+            await self._send_raw(session, "response.cancel")
+        except Exception:
+            LOG.exception("Could not cancel the reply")
+        self._drop_playback("Owner interrupted; reply stopped")
+        for chunk in recent:
+            await session.send_audio(chunk)
+
     async def _microphone(self, session: Any, device: int | None) -> None:
         """Read blocking Windows PCM capture in a worker thread.
 
@@ -658,6 +849,11 @@ class RealtimeConversation:
         import sounddevice as sd
 
         await asyncio.wait_for(self.ready.wait(), timeout=20)
+        import numpy as np
+        from collections import deque
+
+        # The last ~0.4 s of microphone audio, sent on after a local interruption.
+        recent: deque[bytes] = deque(maxlen=4)
         processor = None
         if self.use_aec:
             import numpy as np
@@ -691,7 +887,22 @@ class RealtimeConversation:
                             np.frombuffer(pcm, dtype=np.int16),
                             np.frombuffer(reference, dtype=np.int16),
                         ).tobytes()
-                    assistant_speaking = self.response_active or self.speaker_busy
+                    assistant_speaking = (self.response_active or self.speaker_busy) and not self.barged_in
+                    if self.local_barge is not None:
+                        if assistant_speaking and self.playback_started_at:
+                            now = time.monotonic()
+                            if self.local_barge.started != self.playback_started_at:
+                                self.local_barge.reset(self.playback_started_at)
+                                recent.clear()
+                            recent.append(pcm)
+                            rms = float(np.sqrt(np.mean(np.frombuffer(pcm, dtype=np.int16).astype(np.float32) ** 2)))
+                            if self.local_barge.observe(rms, now):
+                                LOG.info("Local interruption: voice %.0f over echo baseline %.0f",
+                                         rms, self.local_barge.baseline)
+                                await self._local_interrupt(session, list(recent))
+                                recent.clear()
+                            continue
+                        recent.clear()
                     if self.allow_barge_in and assistant_speaking and self.playback_started_at:
                         warmup = float(os.getenv("SPECTER_AEC_WARMUP_MS", "500")) / 1000
                         if time.monotonic() - self.playback_started_at < warmup:
@@ -770,6 +981,11 @@ class RealtimeConversation:
         state = self.playback_tracker.get_state()
         if state["elapsed_ms"] is not None:
             LOG.info("Assistant playback complete (%.0f ms)", state["elapsed_ms"])
+            if self.local_barge is not None and self.local_barge.peak:
+                # Calibration: his echo level vs. the loudest sound heard while he spoke.
+                LOG.info("Echo level while speaking: baseline %.0f, loudest %.0f (interrupt above %.0f)",
+                         self.local_barge.baseline, self.local_barge.peak,
+                         max(self.local_barge.min_rms, self.local_barge.factor * self.local_barge.baseline))
         self.playback_tracker.on_interrupted()
         self.speaker_busy = False
         self.playback_started_at = None
@@ -783,6 +999,16 @@ class RealtimeConversation:
         """
         while not self.stop.is_set():
             await asyncio.sleep(1)
+            reason = None
+            if self.interrupt is not None:
+                try:
+                    reason = self.interrupt()
+                except Exception:
+                    LOG.exception("Availability check failed; keeping the session")
+            if reason:
+                LOG.info("Closing conversation: %s", reason)
+                self.stop.set()
+                return
             if close_requested(self.control_dir, self.local_session_id):
                 now = time.monotonic()
                 if self.manual_close_requested_at is None:
@@ -815,8 +1041,12 @@ class RealtimeConversation:
                 self.stop.set()
                 return
             now = time.monotonic()
-            opening_only = self.session_kind == "foci_checkin" and not self.foci_conversation_started
-            idle, maximum = session_time_limits(opening_only)
+            opening_only = (
+                (self.session_kind == "foci_checkin" and not self.foci_conversation_started)
+                or (self.session_kind == "nudge" and not self.nudge_reply_started)
+                or (self.session_kind in {"greeting", "wake"} and not self.greeting_reply_started)
+            )
+            idle, maximum = session_time_limits(opening_only, self.session_kind)
             if now - self.started > maximum:
                 LOG.info("Closing conversation after %.0f seconds maximum", maximum)
                 self.stop.set()
@@ -874,6 +1104,14 @@ class RealtimeConversation:
         except (OSError, ValueError):
             LOG.exception("Could not load personal memory for new session")
             memory_context = ""
+        if self.session_kind == "nudge":
+            # EN: No web research here: a reminder should stay short and local.
+            # 中文：提醒会话不接网页研究，保持简短、只在本机范围内。
+            return RealtimeAgent(
+                name="Situation nudge",
+                instructions=nudge_agent_instructions(memory_context),
+                tools=[self.make_reminder_response_tool(), self.make_end_conversation_tool()],
+            )
         if self.session_kind == "foci_checkin":
             return RealtimeAgent(
                 name="FOCI wellbeing check-in",

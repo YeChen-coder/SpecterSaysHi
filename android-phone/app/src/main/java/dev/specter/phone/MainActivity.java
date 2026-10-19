@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AppOpsManager;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Process;
@@ -66,10 +67,19 @@ public class MainActivity extends Activity {
                 status.setText("电脑尚未配对。请先运行配对脚本。");
                 return;
             }
+            Keeper.setUserStopped(this, false);
             startForegroundService(new Intent(this, PhoneMonitorService.class));
+            Keeper.scheduleWatchdog(this);
             refresh();
         });
+        addButton(layout, "保持常驻：电池设为不受限制", this::requestUnrestricted);
+        // Both are system switches the user turns on; the app only opens the right page.
+        addButton(layout, "开启睡前封锁（无障碍）", () -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        addButton(layout, "允许封锁时调暗屏幕", () -> startActivity(new Intent(
+                Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:" + getPackageName()))));
         addButton(layout, "停止手机数据服务", () -> {
+            // A deliberate stop is respected: the watchdog will not restart it.
+            Keeper.setUserStopped(this, true);
             stopService(new Intent(this, PhoneMonitorService.class));
             refresh();
         });
@@ -77,7 +87,27 @@ public class MainActivity extends Activity {
         refresh();
         if (getIntent().getBooleanExtra("start_service", false) && usageGranted()
                 && token != null && token.equals(getSharedPreferences("link", MODE_PRIVATE).getString("token", ""))) {
+            Keeper.setUserStopped(this, false);
             startForegroundService(new Intent(this, PhoneMonitorService.class));
+        }
+        // Simply opening the app repairs a stopped service (unless stopped on purpose).
+        Keeper.ensureRunning(this, "app opened");
+        if (getIntent().getBooleanExtra("request_battery_exemption", false)) requestUnrestricted();
+        String setup = getIntent().getStringExtra("open_setup");
+        if ("accessibility".equals(setup)) startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        if ("write_settings".equals(setup)) startActivity(new Intent(
+                Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:" + getPackageName())));
+    }
+
+    /** Ask Android to stop battery-optimizing this app; the user confirms in a system dialog. */
+    private void requestUnrestricted() {
+        if (!Keeper.batteryUnrestricted(this)) {
+            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName())));
+        } else {
+            // Already exempt: open the app's page to check background use / sleeping apps.
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:" + getPackageName())));
         }
     }
 
@@ -117,7 +147,14 @@ public class MainActivity extends Activity {
                 + "\n电脑配对：" + (paired ? "已配置" : "待配置")
                 + "\n局域网：" + (secureLan ? host + "（已配置加密连接）" : "待配置")
                 + "\n通知权限：" + (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == 0 ? "已授权" : "待授权")
-                + "\n\n启动服务后，每 10 秒通过局域网向电脑上报；断线会自动重试。" 
-                + "电脑端仅能发出 focus_on / focus_off 两种例程通知。停止服务即可停止上报。");
+                + "\n数据服务：" + (PhoneMonitorService.running ? "运行中" : "未运行")
+                + "\n电池：" + (Keeper.batteryUnrestricted(this) ? "不受限制" : "受系统优化（可能被关闭）")
+                + (Keeper.backgroundRestricted(this) ? "\n后台：被限制，请在电池设置里改为不受限制" : "")
+                + "\n睡前封锁：" + (GuardService.enabled() ? "已开启" : "未开启（需在无障碍里打开）")
+                + "\n调暗屏幕：" + (Settings.System.canWrite(this) ? "已允许" : "未允许")
+                + "\n灰度：" + (Guard.canGray(this) ? "已授权" : "未授权（需在电脑上运行一条 adb 命令）")
+                + (Guard.active(this) ? "\n当前：封锁中（" + Guard.mode(this) + "）" : "")
+                + "\n\n服务会在开机、更新后和每 15 分钟自动检查并恢复；手动停止后不会自动恢复。"
+                + "每 10 秒通过局域网向电脑上报；断线会自动重试。");
     }
 }

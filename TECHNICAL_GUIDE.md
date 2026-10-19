@@ -23,9 +23,18 @@ flowchart LR
     Relay --> DH[DH Live Full or Mini]
     Phone[Android app] --> Bridge[phone_link.py]
     Bridge --> PhoneState[MQTT phone status]
+    Presence --> Situation[situation.py]
+    Evaluator --> Situation
+    PhoneState --> Situation
+    Situation --> Nudge[MQTT nudge request]
+    Nudge --> Coordinator
+    Coordinator --> Bridge
+    Bridge --> Phone
+    Wake[wake_word.py] --> Coordinator
+    Availability[availability.py] --> Coordinator
 ```
 
-The phone bridge publishes state and supports phone commands; it does not currently start a Realtime conversation. Cat arrivals follow a separate identification and one-shot TTS path rather than a Realtime session or the avatar relay.
+The phone bridge publishes state, delivers bedtime reminders (text, spoken audio, action buttons) and lockdown commands to the phone, and receives the owner's replies; it does not start a Realtime conversation. Cat arrivals follow a separate identification and one-shot TTS path rather than a Realtime session or the avatar relay.
 
 ## Code ownership by subsystem
 
@@ -33,9 +42,11 @@ The phone bridge publishes state and supports phone commands; it does not curren
 | --- | --- | --- |
 | Event generation | `frigate/config.example.yml`, `camera_bridge.ps1`, `presence.py`, `tiled_cat.py`, `foci_state.py` | Capture, detect, filter arrivals, evaluate sustained wearable states |
 | Coordination | `specter.py`, `session_gate.py`, `session_control.py` | Route triggers and manage session occupancy |
+| Situation engine | `situation.py`, `nudge_prompt.py`, `nudge_voice.py`, `phone_guard.py` | Fuse presence, FOCI and phone state; bedtime and sitting nudges under an interruption budget; strict bedtime ladder; reminder text and TTS; lockdown allow list |
+| Availability | `availability.py`, `wake_word.py` | Camera cover as do-not-disturb, quiet while another app uses the microphone, local "Hey Specter" wake word |
 | Conversation | `realtime_agent.py`, `foci_prompt.py`, `visual.py`, `echo.py` | Realtime voice, instructions, current still images, interruption and echo handling |
 | Memory | `session_memory.py` | Summarize sessions, consolidate notes, load context for later conversations |
-| Phone | `android-phone/`, `phone_link.py`, `setup_phone_link.ps1` | Android usage reports, pairing and pinned TLS |
+| Phone | `android-phone/`, `phone_link.py`, `setup_phone_link.ps1` | Android usage reports, pairing and pinned TLS, reminder notifications with auto-played voice, bedtime lockdown (accessibility service), self-restarting foreground service |
 | Avatar transport | `mini_audio_publisher.py` | Copy played 24 kHz PCM to the selected local backend |
 | Avatar rendering | `feathertalk_lab/`, `feathertalk_qinche_runtime/`, `dh_live_full/`, `dh_live_mini/` | Streaming inference, compositing, idle animation and speech-to-idle transitions |
 
@@ -139,6 +150,33 @@ docker compose --profile prepare run --rm dh-live-full-prepare
 
 Select `SPECTER_AVATAR_BACKEND=dh_live` and `SPECTER_DH_LIVE_MODEL=full` or `mini`, supply the appropriate resources, enable avatar audio, and use `start_avatar.ps1`. Full display: `http://127.0.0.1:18890/`; Mini display: `http://127.0.0.1:18888/static/SpecterMini.html`. Full optional teeth/idle resources require their preparation scripts and matching avatar configuration.
 
+## Situation engine and bedtime coaching
+
+`situation.py` is pure logic with an injected clock. It reads retained MQTT state (`specter/presence/owner`, `specter/foci/state`, `specter/phone/status`, `specter/session/state`, `specter/situation/quiet`) and publishes `specter/nudge/request`; replies return on `specter/nudge/result` and lockdown state on `specter/phone/guard`. It is off by default (`SPECTER_SITUATION_ENABLED=false`); with it on and every delivery channel off, it only logs what it would have said.
+
+Two rules exist. **Sitting**: after `SPECTER_SIT_MINUTES` at the desk, deferred while FOCI reports flow. **Bedtime**: inside the window from `SPECTER_BEDTIME` (or `_WEEKEND`) to `SPECTER_MORNING`, while the owner is still awake at the desk or on the phone. All nudges share an interruption budget: minimum interval, daily cap, backoff after ignored nudges, one snooze per night.
+
+With `SPECTER_BEDTIME_STRICT=true` bedtime becomes a ladder:
+
+| Level | What happens |
+| --- | --- |
+| L1 | Gentle spoken reminder on the phone (or at the desk), with Going to bed / Stay with me / 10 more minutes |
+| L2 | Firmer; a broken promise ("going to bed" but still on the phone after 3 minutes, 6 after Stay with me) jumps here directly |
+| L3 | Phone lockdown until morning: any app not on the allow list is sent back to the home screen with a short spoken line |
+| L4 | After 3 bounces, or 30 minutes still active under lockdown: the screen also locks a minute after each unlock and is dimmed |
+
+The escape hatch is `python phone_link.py release`, which lifts the lockdown and keeps bedtime quiet until morning. The allow list is `phone_guard.DEFAULT_ALLOW` (phone, SMS, gallery, calendar, Gmail, clock, camera, maps, settings) plus `SPECTER_GUARD_ALLOW_EXTRA`; `SPECTER_GUARD_ALLOW` replaces it entirely. Reminder wording is generated per nudge with fixed fallbacks (`nudge_prompt.py`); spoken audio uses OpenAI TTS (`SPECTER_NUDGE_TTS_VOICE`) and short lockdown lines are recorded once and cached in ignored `private/audio/`.
+
+Phone side (`android-phone/`, versionName 1.0): a sticky foreground service restarted by a boot receiver and a JobScheduler watchdog; `VoicePlayer` plays reminders on the media stream with transient audio focus; `GuardService` is an accessibility service that watches window changes and sends blocked apps home. Lockdown needs the accessibility service enabled and, for dimming, "Modify system settings". Ask the phone to exempt the app from battery optimisation so it survives in the background.
+
+## Availability, wake word and interruption
+
+- **Camera cover = do not disturb.** `availability.CoverDetector` watches frame brightness: dark (below `SPECTER_COVER_DARK_BELOW`) for 10 seconds means covered, bright for 3 seconds means open. While covered there are no greetings or desk nudges, and dark frames are never sent as vision.
+- **Quiet while dictating.** On Windows, the microphone consent store shows which apps are using the microphone. If one listed in `SPECTER_DICTATION_APPS` is, Specter does not open a conversation and ends one in progress.
+- **Short greetings.** A greeting with no reply closes after `SPECTER_GREETING_SESSION_IDLE_SECONDS`.
+- **Wake word.** `wake_word.py` segments short utterances by energy, transcribes them locally with faster-whisper (`base.en`, CPU int8) and matches "Hey Specter" with spelling and accent tolerance ("Hi Specter" also works). Audio stays on the machine and nothing is logged unless the phrase matches. Anything said after the name becomes the first request.
+- **Interruption.** `SPECTER_BARGE_IN_MODE=local` (default) does not upload the microphone while he speaks; after echo cancellation, a voice clearly louder than his echo for about 0.3 seconds cancels the reply and the speech is passed on. `server` uses Realtime server VAD, which can react to his own echo on loudspeakers.
+
 ## Prompts, memory, phone and diagnostics
 
 Normal conversation instructions are in `realtime_agent.py:agent_instructions`; FOCI instructions and opening are in `foci_prompt.py`. They currently contain separate role definitions. Research instructions live in `make_research_tool`; memory writing and consolidation instructions live in `session_memory.py`.
@@ -156,7 +194,7 @@ Logs are in ignored `logs/`. Sensitive transcript logging and SDK tracing are di
 .\.venv\Scripts\python.exe -m pytest -q tests
 ```
 
-The exported suite exercises event gates, session controls, memory, mocked Realtime behavior, audio routing, streaming history and transition geometry without loading a private identity. Unit-test results do not establish fresh-machine GPU deployment, live device behavior, visual quality, or end-to-end synchronization. Those require your own assets and integration checks.
+The exported suite exercises event gates, session controls, the situation engine and strict bedtime ladder, phone reminder and lockdown protocols, cover detection, wake-phrase matching, memory, mocked Realtime behavior, audio routing, streaming history and transition geometry without loading a private identity. Unit-test results do not establish fresh-machine GPU deployment, live device behavior, visual quality, or end-to-end synchronization. Those require your own assets and integration checks.
 
 ## Updating the portfolio
 

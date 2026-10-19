@@ -1,3 +1,114 @@
+# SpecterSaysHi · 项目说明
+
+> 这一节是结构化的项目说明：它能做什么、怎么搭起来、怎么用，以及最近更新了什么。
+> **作者原文、吐槽和开发日志在分隔线之后，保持原样**，新的日志继续追加在文末即可。
+> English version: [README.md](README.md) · 详细技术文档：[TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md)
+
+SpecterSaysHi 是一个跑在自己 Windows 电脑上的陪伴型 AI：电子男友 + 私人管家。它通过摄像头知道你在不在桌前，用实时语音和你说话，带一个对口型的数字人形象；到了该睡觉的时候，它会先哄，再管，最后真的把手机锁起来。
+
+## 最近更新（2026 年 10 月）
+
+- **情境引擎**（`situation.py`）：把摄像头在场、FOCI 可穿戴状态和手机使用情况在 MQTT 上融合，判断什么时候该提醒你睡觉、什么时候该起来活动。所有提醒共用一个"打扰预算"（最短间隔、每日上限、没人理会就退避、每晚一次稍后提醒）。
+- **手机端哄睡**：提醒以通知形式发到手机，**用他的声音自动播放**；按钮有 Going to bed / Stay with me（一段录好的放松引导）/ 再给 10 分钟。
+- **严格就寝阶梯**：L1 温柔 → L2 严厉 → L3 手机封锁到早上（打开不在放行名单里的应用会被弹回桌面，并听到一句短语音，三十多句不重样）→ L4 解锁一分钟后自动锁屏并调暗。答应了"去睡"会被检查。电脑上留了后门：`python phone_link.py release`。
+- **手机端常驻**：前台服务 + 开机自启 + 看门狗，被系统杀掉后几秒内自动恢复。
+- **可用性**：合上摄像头盖子 = 勿扰；别的程序（如语音输入法、ChatGPT、浏览器）在用麦克风时他不出声；打招呼没人接话就很快结束。
+- **唤醒词 "Hey Specter"**（"Hi Specter" 也行）：本机 Whisper 识别，声音不出电脑、不保存。
+- **可以打断他**：默认本机打断（回声消除后按音量判断，他听不到自己的回声），说话就能让他停下。
+- **摄像头桥自愈**：采集进程意外退出时自动重启。
+
+## 它能做什么
+
+| 能力 | 说明 |
+| --- | --- |
+| 看到你回来就打招呼 | Frigate 人脸识别 → MQTT → 打开一次实时语音对话 |
+| 实时语音对话 | OpenAI Realtime；能看当前摄像头画面、能联网搜索、有短期 / 长期记忆 |
+| 数字人形象 | 本地 GPU 实时对口型（FeatherTalk，另有 DH Live 实现），空闲时是带呼吸感的循环视频 |
+| FOCI 状态关怀 | 可穿戴设备报告持续疲惫等状态时主动问候 |
+| 猫咪播报 | 识别到猫回家时播一句话（单独的识别与 TTS 流程） |
+| 催睡觉 / 久坐提醒 | 情境引擎 + 打扰预算；手机通知 + 语音；严格模式可封锁手机 |
+| 勿扰与唤醒 | 摄像头盖子勿扰、听写时安静、"Hey Specter" 唤醒、可打断 |
+
+## 架构
+
+```mermaid
+flowchart LR
+    Cam[摄像头] --> Frigate --> MQTT
+    MQTT --> Presence[presence.py 在场]
+    FOCI[FOCI 可穿戴] --> FociState[foci_state.py]
+    Phone[Android 手机 App] <--> Link[phone_link.py]
+    Presence --> Situation[situation.py 情境引擎]
+    FociState --> Situation
+    Link --> Situation
+    Situation -->|提醒请求| Core[specter.py 协调器]
+    Presence --> Core
+    FociState --> Core
+    Wake[wake_word.py 唤醒词] --> Core
+    Avail[availability.py 盖子 / 听写] --> Core
+    Core --> Voice[realtime_agent.py 实时语音]
+    Core -->|通知 + 语音 + 封锁| Link
+    Voice --> Speaker[扬声器]
+    Voice --> Avatar[数字人 FeatherTalk]
+```
+
+主要 MQTT 话题：`specter/presence/owner`、`specter/foci/state`、`specter/phone/status`、`specter/session/state`、`specter/situation/quiet`、`specter/nudge/request`、`specter/nudge/result`、`specter/phone/guard`。
+
+## 代码地图
+
+| 部分 | 文件 |
+| --- | --- |
+| 协调与会话 | `specter.py`、`session_gate.py`、`session_control.py` |
+| 在场与事件 | `presence.py`、`camera_bridge.ps1`、`foci_state.py`、`tiled_cat.py`、`cat_alert.py` |
+| 实时语音 | `realtime_agent.py`、`foci_prompt.py`、`visual.py`、`echo.py`、`session_memory.py` |
+| 情境引擎与哄睡 | `situation.py`、`nudge_prompt.py`、`nudge_voice.py`、`phone_guard.py` |
+| 勿扰与唤醒 | `availability.py`、`wake_word.py` |
+| 手机 | `android-phone/`、`phone_link.py`、`setup_phone_link.ps1` |
+| 数字人 | `mini_audio_publisher.py`、`feathertalk_lab/`、`feathertalk_qinche_runtime/`、`dh_live_full/`、`dh_live_mini/` |
+
+## 快速开始（Windows）
+
+需要：Python、Docker Desktop、带 DirectShow 的 FFmpeg、摄像头、麦克风和扬声器、OpenAI API key。数字人需要 NVIDIA 显卡，并且要自己准备模型和人物素材（仓库里不含）。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
+Copy-Item config.example.env config.local.env
+Copy-Item frigate/config.example.yml frigate/config.yml
+docker compose up -d mediamtx mosquitto frigate
+.\camera_bridge.ps1 -CameraName '你的摄像头名' -Ffmpeg 'ffmpeg.exe 的路径'
+.\.venv\Scripts\python.exe specter.py --dry-run
+```
+
+然后编辑 `config.local.env`：填 `SPECTER_TARGET_NAME`（Frigate 人脸库里你的名字）、麦克风 / 扬声器、`OPENAI_API_KEY`。功能开关都在这个文件里，默认偏保守：
+
+- 情境引擎：`SPECTER_SITUATION_ENABLED=true`（只开它、不开任何送达渠道时，只记录日志不打扰人）
+- 手机提醒：`SPECTER_NUDGE_PHONE=true`；严格模式：`SPECTER_BEDTIME_STRICT=true`
+- 就寝时间：`SPECTER_BEDTIME`、`SPECTER_BEDTIME_WEEKEND`、`SPECTER_MORNING`
+- 封锁时额外放行的应用：`SPECTER_GUARD_ALLOW_EXTRA`（Android 包名，逗号分隔）
+- 勿扰与唤醒：`SPECTER_COVER_DND`、`SPECTER_DICTATION_APPS`、`SPECTER_WAKE_ENABLED`、`SPECTER_BARGE_IN_MODE`
+
+**手机端**：用 Android SDK + JDK 17 编译 `android-phone/`，`setup_phone_link.ps1 -Install` 通过 USB 配对。手机上需要：允许使用情况访问；把 Specter Phone 设为电池"不受限制"；要用封锁功能时，在无障碍里打开 "Specter 睡前封锁"，L4 调暗还需要"修改系统设置"权限。
+
+**后门**：任何时候在电脑上运行 `python phone_link.py release`，立即解除封锁，并且到早上之前不再催。
+
+## 隐私与密钥
+
+- API key、手机配对令牌和证书只存在本地被忽略的文件里（`config.local.env`、`private/`），不会进仓库；记忆、日志和录好的语音也一样。
+- 运行时会发给 OpenAI 的内容：对话音频、对话中的摄像头静帧、提醒文案的生成请求（只含提醒等级和情形，比如答应睡了却还在玩；超过就寝多少分钟、正在用的应用名，以及"今天似乎很累"这类粗略提示）、要朗读的文字。
+- 唤醒词完全在本机识别（首次运行会下载 Whisper 模型），只在听到唤醒词时记一行日志，不记内容。
+- 摄像头盖子合上时，不会把黑画面当成"看到"发出去。
+
+## 已知限制
+
+- 主要在一台 Windows 电脑 + 一台三星 Android 手机上开发和验证；默认放行名单里的系统应用包名按三星 / Google 写的，其他品牌可能需要用 `SPECTER_GUARD_ALLOW` 调整。
+- 数字人的人物素材、训练视频和模型权重都不在仓库里，克隆下来没有现成的人物。
+- 这是一个个人项目的源码快照，部分路径和命名保留了实际开发时的样子。
+
+---
+
+<!-- 以下为作者原文与开发日志（新日志请继续追加在文末） -->
+
 https://github.com/user-attachments/assets/a6343550-81f4-4944-91cd-5052c0080596
 
 **技术部分请移步 https://github.com/YeChen-coder/SpecterSaysHi/blob/main/TECHNICAL_GUIDE.md ， 这里作为唯一一个还有可能被人类看到的文档， 是用来表达的**

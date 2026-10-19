@@ -6,3 +6,4 @@ openai-agents>=0.22,<0.23
 pywebrtc-audio==0.2.0
 Pillow>=11,<13
 openvino==2025.4.1
+faster-whisper>=1.1,<2

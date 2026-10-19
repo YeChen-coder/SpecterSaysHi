@@ -19,31 +19,23 @@ import android.provider.Settings;
 import android.service.notification.StatusBarNotification;
 import android.util.Log;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.cert.CertificateException;
-import java.security.cert.X509Certificate;
+import java.io.File;
+
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
-
 public class PhoneMonitorService extends Service {
     private static final String TAG = "SpecterPhone";
-    private static final String USB_BASE = "http://127.0.0.1:18765";
     private static final String SERVICE_CHANNEL = "specter_service";
     private static final String ROUTINE_CHANNEL = "specter_routines";
+    private static final String NUDGE_CHANNEL = "specter_nudges";
+    private static final String VOICE_NUDGE_CHANNEL = "specter_nudges_voice";
+    /** True while the service is in the foreground; read by the watchdog. */
+    static volatile boolean running;
     private ScheduledExecutorService worker;
     private String lastForegroundPackage = "";
 
@@ -52,6 +44,14 @@ public class PhoneMonitorService extends Service {
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.createNotificationChannel(new NotificationChannel(SERVICE_CHANNEL, "Specter 手机数据连接", NotificationManager.IMPORTANCE_LOW));
         manager.createNotificationChannel(new NotificationChannel(ROUTINE_CHANNEL, "Specter 例程命令", NotificationManager.IMPORTANCE_DEFAULT));
+        // High importance shows reminders as a heads-up banner.
+        manager.createNotificationChannel(new NotificationChannel(NUDGE_CHANNEL, "Specter reminders", NotificationManager.IMPORTANCE_HIGH));
+        // When he speaks, his voice is the alert: no chime to talk over, only a vibration.
+        NotificationChannel voiceChannel = new NotificationChannel(
+                VOICE_NUDGE_CHANNEL, "Specter reminders (spoken)", NotificationManager.IMPORTANCE_HIGH);
+        voiceChannel.setSound(null, null);
+        voiceChannel.enableVibration(true);
+        manager.createNotificationChannel(voiceChannel);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -62,15 +62,26 @@ public class PhoneMonitorService extends Service {
                 .setContentText("向电脑上报手机状态")
                 .setSmallIcon(android.R.drawable.ic_menu_info_details)
                 .setContentIntent(pending).setOngoing(true).build();
-        startForeground(1, notice);
+        try {
+            startForeground(1, notice);
+        } catch (Exception e) {
+            // A system restart from the background can be refused; the watchdog retries.
+            Log.w(TAG, "Foreground start refused; stopping until the watchdog retries", e);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        running = true;
+        Keeper.scheduleWatchdog(this);
         if (worker == null) {
             worker = Executors.newSingleThreadScheduledExecutor();
             worker.scheduleWithFixedDelay(this::tick, 0, 10, TimeUnit.SECONDS);
         }
-        return START_NOT_STICKY;
+        // If the system kills the process, ask it to recreate this service.
+        return START_STICKY;
     }
 
     @Override public void onDestroy() {
+        running = false;
         if (worker != null) worker.shutdownNow();
         super.onDestroy();
     }
@@ -79,37 +90,164 @@ public class PhoneMonitorService extends Service {
 
     private void tick() {
         try {
-            String token = getSharedPreferences("link", MODE_PRIVATE).getString("token", "");
-            if (token.isEmpty()) return;
-            call("POST", "/v1/status", sample(), token);
-            JSONObject next = call("GET", "/v1/commands/next", null, token).optJSONObject("command");
+            if (LinkClient.token(this).isEmpty()) return;
+            LinkClient.call(this, "POST", "/v1/status", sample());
+            JSONObject next = LinkClient.call(this, "GET", "/v1/commands/next", null).optJSONObject("command");
             if (next == null) return;
             String id = next.optString("id");
             String name = next.optString("name");
-            if (!name.equals("focus_on") && !name.equals("focus_off")) return;
+            if (name.equals("guard")) {
+                // Lockdown changes (including the computer's release backdoor) need no notification.
+                applyGuard(next.getJSONObject("payload"));
+                LinkClient.call(this, "POST", "/v1/commands/ack", new JSONObject().put("id", id));
+                return;
+            }
+            if (!name.equals("focus_on") && !name.equals("focus_off") && !name.equals("nudge")) return;
+            // Without permission the command is left unacknowledged, so the computer
+            // learns from its expiry that nothing was shown.
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
             String prior = getSharedPreferences("link", MODE_PRIVATE).getString("last_command_id", "");
             if (!id.equals(prior)) {
-                NotificationManager manager = getSystemService(NotificationManager.class);
-                // Keep only the latest command notification visible. Samsung
-                // Modes may still need to be turned off separately.
-                for (StatusBarNotification active : manager.getActiveNotifications()) {
-                    if (ROUTINE_CHANNEL.equals(active.getNotification().getChannelId())) {
-                        manager.cancel(active.getTag(), active.getId());
-                    }
+                if (name.equals("nudge")) {
+                    JSONObject payload = next.getJSONObject("payload");
+                    // Lock first, then speak: the warning should already be true when heard.
+                    JSONObject guard = payload.optJSONObject("guard");
+                    if (guard != null) applyGuard(guard);
+                    showNudge(payload);
+                } else {
+                    showRoutineCommand(id, name);
                 }
-                String keyword = name.equals("focus_on") ? "SPECTER_FOCUS_ON" : "SPECTER_FOCUS_OFF";
-                Notification notification = new Notification.Builder(this, ROUTINE_CHANNEL)
-                        .setSmallIcon(android.R.drawable.ic_dialog_info)
-                        .setContentTitle(keyword)
-                        .setContentText("Specter 命令：" + keyword)
-                        .setAutoCancel(true).build();
-                manager.notify(id.hashCode(), notification);
                 getSharedPreferences("link", MODE_PRIVATE).edit().putString("last_command_id", id).apply();
             }
-            call("POST", "/v1/commands/ack", new JSONObject().put("id", id), token);
+            LinkClient.call(this, "POST", "/v1/commands/ack", new JSONObject().put("id", id));
         } catch (Exception e) {
             Log.w(TAG, "Computer link unavailable; will retry", e);
+        }
+    }
+
+    private void showRoutineCommand(String id, String name) {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        // Keep only the latest command notification visible. Samsung
+        // Modes may still need to be turned off separately.
+        for (StatusBarNotification active : manager.getActiveNotifications()) {
+            if (ROUTINE_CHANNEL.equals(active.getNotification().getChannelId())) {
+                manager.cancel(active.getTag(), active.getId());
+            }
+        }
+        String keyword = name.equals("focus_on") ? "SPECTER_FOCUS_ON" : "SPECTER_FOCUS_OFF";
+        Notification notification = new Notification.Builder(this, ROUTINE_CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(keyword)
+                .setContentText("Specter 命令：" + keyword)
+                .setAutoCancel(true).build();
+        manager.notify(id.hashCode(), notification);
+    }
+
+    /** A reminder from Specter with up to three answer buttons. */
+    private void showNudge(JSONObject payload) throws Exception {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        // A newer reminder replaces any older one still on screen.
+        for (StatusBarNotification active : manager.getActiveNotifications()) {
+            String channel = active.getNotification().getChannelId();
+            if (NUDGE_CHANNEL.equals(channel) || VOICE_NUDGE_CHANNEL.equals(channel)) {
+                manager.cancel(active.getTag(), active.getId());
+            }
+        }
+        String nudgeId = payload.getString("nudge_id");
+        String title = payload.getString("title");
+        String text = payload.getString("text");
+        int notificationId = nudgeId.hashCode();
+        // Fetch his voice before showing, so it can speak as the banner appears.
+        // A failed download still shows the text reminder, with the normal chime.
+        File voice = fetchAudio(payload.optString("audio_id", ""));
+        File stay = fetchAudio(payload.optString("stay_audio_id", ""));
+        String channel = voice != null ? VOICE_NUDGE_CHANNEL : NUDGE_CHANNEL;
+        Notification publicVersion = new Notification.Builder(this, channel)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText("Specter reminder")
+                .build();
+        Notification.Builder builder = new Notification.Builder(this, channel)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
+                .setCategory(Notification.CATEGORY_REMINDER)
+                // The lock screen shows only "Specter reminder", not the message.
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setPublicVersion(publicVersion)
+                .setAutoCancel(true);
+        JSONArray actions = payload.optJSONArray("actions");
+        for (int i = 0; actions != null && i < actions.length() && i < 3; i++) {
+            JSONObject action = actions.getJSONObject(i);
+            // Without the wind-down recording, Stay with me would be an empty promise.
+            if ("stay".equals(action.getString("id")) && stay == null) continue;
+            Intent reply = new Intent(this, NudgeActionReceiver.class)
+                    .putExtra(NudgeActionReceiver.EXTRA_STAY_AUDIO, stay == null ? null : stay.getPath())
+                    .putExtra(NudgeActionReceiver.EXTRA_NUDGE_ID, nudgeId)
+                    .putExtra(NudgeActionReceiver.EXTRA_ACTION, action.getString("id"))
+                    .putExtra(NudgeActionReceiver.EXTRA_SNOOZE_MINUTES, action.optInt("snooze_minutes", 0))
+                    .putExtra(NudgeActionReceiver.EXTRA_NOTIFICATION_ID, notificationId);
+            PendingIntent pending = PendingIntent.getBroadcast(
+                    this, notificationId * 4 + i, reply,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            builder.addAction(new Notification.Action.Builder(null, action.getString("label"), pending).build());
+        }
+        manager.notify(notificationId, builder.build());
+        // A short beat lets the banner appear before he starts talking.
+        if (voice != null) VoicePlayer.play(this, voice, false, 400);
+    }
+
+    private void applyGuard(JSONObject guard) throws Exception {
+        if ("off".equals(guard.optString("mode", "off"))) {
+            Guard.release(this);
+            Log.i(TAG, "Lockdown released");
+            return;
+        }
+        java.util.List<String> clips = new java.util.ArrayList<>();
+        JSONArray ids = guard.optJSONArray("bounce_audio_ids");
+        for (int i = 0; ids != null && i < ids.length(); i++) {
+            File clip = fetchAudio(ids.getString(i));
+            if (clip != null) clips.add(clip.getPath());
+        }
+        Guard.apply(this, guard, clips);
+        Log.i(TAG, "Lockdown " + guard.getString("mode") + " until " + guard.getLong("until_ms"));
+    }
+
+    /** Download a voice clip once; ids are content hashes, so a cached file is reused. */
+    private File fetchAudio(String audioId) {
+        if (!audioId.matches("[0-9a-f]{8,64}")) return null;
+        File folder = new File(getCacheDir(), "specter_audio");
+        if (!folder.isDirectory() && !folder.mkdirs()) return null;
+        File file = new File(folder, audioId + ".mp3");
+        if (file.isFile() && file.length() > 0) return file;
+        try {
+            LinkClient.download(this, "/v1/audio/" + audioId, file);
+            pruneAudio(folder);
+            return file;
+        } catch (Exception e) {
+            Log.w(TAG, "Could not download voice clip", e);
+            return null;
+        }
+    }
+
+    private static void pruneAudio(File folder) {
+        File[] files = folder.listFiles();
+        // Room for tonight's reminders, the wind-down and the lockdown lines.
+        if (files == null || files.length <= 60) return;
+        java.util.Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        for (int i = 60; i < files.length; i++) {
+            if (!files[i].delete()) Log.w(TAG, "Could not remove old clip " + files[i].getName());
+        }
+    }
+
+    private String appLabel(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return "";
+        try {
+            android.content.pm.PackageManager pm = getPackageManager();
+            return pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString();
+        } catch (Exception e) {
+            return "";
         }
     }
 
@@ -143,66 +281,15 @@ public class PhoneMonitorService extends Service {
         value.put("device_locked", locked);
         value.put("usage_access", usage);
         value.put("foreground_package", foreground);
+        value.put("foreground_label", appLabel(foreground));
+        // Lets the computer notice a lockdown that was switched off on the phone.
+        value.put("guard_mode", Guard.mode(this));
+        value.put("guard_enabled", GuardService.enabled());
+        value.put("can_dim", Settings.System.canWrite(this));
+        value.put("can_gray", Guard.canGray(this));
         value.put("last_interaction_age_ms", interaction < 0 ? JSONObject.NULL : Math.max(0, now - interaction));
         value.put("brightness", Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, -1));
         value.put("brightness_mode", Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE, -1));
         return value;
-    }
-
-    private JSONObject call(String method, String path, JSONObject body, String token) throws Exception {
-        String host = getSharedPreferences("link", MODE_PRIVATE).getString("lan_host", "");
-        String fingerprint = getSharedPreferences("link", MODE_PRIVATE).getString("lan_cert_sha256", "");
-        boolean lan = !host.isEmpty() && fingerprint.matches("[0-9a-fA-F]{64}");
-        String base = lan ? "https://" + host + ":18766" : USB_BASE;
-        HttpURLConnection connection = (HttpURLConnection) new URL(base + path).openConnection();
-        if (lan) {
-            HttpsURLConnection secure = (HttpsURLConnection) connection;
-            SSLContext context = SSLContext.getInstance("TLS");
-            final String expected = fingerprint.toLowerCase(java.util.Locale.ROOT);
-            context.init(null, new TrustManager[]{new X509TrustManager() {
-                @Override public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
-                    throw new CertificateException("Client certificates are not accepted");
-                }
-                @Override public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
-                    if (chain == null || chain.length == 0) throw new CertificateException("Missing server certificate");
-                    try {
-                        chain[0].checkValidity();
-                        byte[] digest = MessageDigest.getInstance("SHA-256").digest(chain[0].getEncoded());
-                        StringBuilder actual = new StringBuilder(64);
-                        for (byte part : digest) actual.append(String.format(java.util.Locale.ROOT, "%02x", part & 0xff));
-                        if (!expected.contentEquals(actual)) throw new CertificateException("Specter computer certificate changed");
-                    } catch (CertificateException e) {
-                        throw e;
-                    } catch (Exception e) {
-                        throw new CertificateException("Could not verify Specter computer", e);
-                    }
-                }
-                @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-            }}, null);
-            secure.setSSLSocketFactory(context.getSocketFactory());
-            // The exact pinned certificate identifies the server even when its LAN IP changes.
-            secure.setHostnameVerifier((name, session) -> true);
-        }
-        connection.setRequestMethod(method);
-        connection.setConnectTimeout(3000);
-        connection.setReadTimeout(3000);
-        connection.setRequestProperty("Authorization", "Bearer " + token);
-        if (body != null) {
-            connection.setDoOutput(true);
-            connection.setRequestProperty("Content-Type", "application/json");
-            try (OutputStream stream = connection.getOutputStream()) {
-                stream.write(body.toString().getBytes(StandardCharsets.UTF_8));
-            }
-        }
-        int status = connection.getResponseCode();
-        if (status < 200 || status >= 300) throw new IllegalStateException("Computer returned " + status);
-        StringBuilder content = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) content.append(line);
-        } finally {
-            connection.disconnect();
-        }
-        return new JSONObject(content.toString());
     }
 }

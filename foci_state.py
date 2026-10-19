@@ -169,15 +169,29 @@ class FociStateEvaluator:
 
 
 async def watch_foci(
-    on_trigger: Callable[[FociAssessment], bool],
+    on_trigger: Callable[[FociAssessment], bool] | None,
     *,
     url: str = "http://127.0.0.1:8765",
     evaluator: FociStateEvaluator | None = None,
+    on_sample: Callable[[dict[str, Any] | None], None] | None = None,
 ) -> None:
-    """Subscribe only to the local dashboard; never initiate a BLE connection."""
+    """Subscribe only to the local dashboard; never initiate a BLE connection.
+
+    on_trigger=None only relays samples. on_sample receives each realtime event,
+    or None whenever the feed is unavailable.
+    中文：on_trigger 为 None 时只转发样本；数据源不可用时 on_sample 收到 None。
+    """
     import websockets
 
     evaluator = evaluator or FociStateEvaluator()
+
+    def relay(event: dict[str, Any] | None) -> None:
+        if on_sample is None:
+            return
+        try:
+            on_sample(event)
+        except Exception:
+            LOG.exception("FOCI sample relay failed")
     last_failure: str | None = None
     ws_url = url.replace("http", "ws", 1) + "/ws"
 
@@ -191,6 +205,7 @@ async def watch_foci(
             status = await asyncio.to_thread(read_status)
             if not status.get("connected"):
                 evaluator.unavailable()
+                relay(None)
                 await asyncio.sleep(3)
                 continue
             async with websockets.connect(ws_url, open_timeout=5, ping_interval=20) as socket:
@@ -208,8 +223,12 @@ async def watch_foci(
                         config = event.get("config")
                         if not isinstance(config, dict) or not config.get("connected"):
                             evaluator.unavailable()
+                            relay(None)
                             break
                     elif event.get("kind") == "realtime":
+                        relay(event)
+                        if on_trigger is None:
+                            continue
                         assessment = evaluator.observe(event)
                         if assessment is not None:
                             try:
@@ -226,4 +245,5 @@ async def watch_foci(
                 LOG.warning("FOCI local data feed unavailable: %s", failure)
             last_failure = failure
         evaluator.unavailable()
+        relay(None)
         await asyncio.sleep(3)

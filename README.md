@@ -1,3 +1,114 @@
+# SpecterSaysHi · Project overview
+
+> This section is the structured overview: what it does, how it fits together, how to set it up, and what changed recently.
+> **The author's original write-up, rants and development log follow the divider below, unchanged.**
+> 中文版：[README_zh.md](README_zh.md) (the Chinese development log is the most up to date) · Full technical guide: [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md)
+
+SpecterSaysHi is a companion AI that runs on your own Windows PC: part cyber-boyfriend, part personal butler. A camera tells it whether you are at the desk, it talks with you in real-time voice, and it has a lip-synced avatar. At bedtime it coaxes first, then gets strict, and in the end really does lock your phone.
+
+## Recent updates (October 2026)
+
+- **Situation engine** (`situation.py`): fuses camera presence, the FOCI wearable state and phone usage over MQTT to decide when to send you to bed or get you up from your chair. All nudges share an interruption budget (minimum interval, daily cap, backoff when ignored, one snooze per night).
+- **Bedtime coaching on the phone**: reminders arrive as notifications and **play aloud in his voice**, with Going to bed / Stay with me (a recorded wind-down) / 10 more minutes.
+- **Strict bedtime ladder**: L1 gentle → L2 firm → L3 phone lockdown until morning (any app not on the allow list is sent back to the home screen with a short spoken line, 30+ of them) → L4 the screen also locks a minute after each unlock and is dimmed. "Going to bed" is a promise that gets checked. Escape hatch on the PC: `python phone_link.py release`.
+- **Phone app stays alive**: foreground service, start on boot and a watchdog; it comes back within seconds if the system kills it.
+- **Availability**: closing the camera cover means do not disturb; he stays quiet while another app (a dictation tool, ChatGPT, a browser) is using the microphone; an unanswered greeting ends quickly.
+- **Wake word "Hey Specter"** ("Hi Specter" works too): recognized on the PC with Whisper; audio never leaves the machine and is not stored.
+- **You can interrupt him**: local barge-in by default (loudness after echo cancellation, so he cannot hear his own echo). Start talking and he stops.
+- **Camera bridge self-heals**: the capture process is restarted if it dies.
+
+## What it does
+
+| Capability | How |
+| --- | --- |
+| Greets you when you come back | Frigate face recognition → MQTT → one real-time voice session |
+| Real-time voice conversation | OpenAI Realtime; sees the current camera still, searches the web, short- and long-term memory |
+| Avatar | Local GPU real-time lip sync (FeatherTalk; a DH Live implementation is also included); a breathing idle loop between replies |
+| FOCI check-ins | Reaches out when the wearable reports sustained states such as fatigue |
+| Cat announcements | A short line when a cat comes home (separate recognition and TTS path) |
+| Bedtime and sitting nudges | Situation engine plus interruption budget; phone notifications with voice; strict mode can lock the phone |
+| Do not disturb and wake-up | Camera cover DND, quiet while dictating, "Hey Specter", barge-in |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Cam[Camera] --> Frigate --> MQTT
+    MQTT --> Presence[presence.py]
+    FOCI[FOCI wearable] --> FociState[foci_state.py]
+    Phone[Android phone app] <--> Link[phone_link.py]
+    Presence --> Situation[situation.py situation engine]
+    FociState --> Situation
+    Link --> Situation
+    Situation -->|nudge request| Core[specter.py coordinator]
+    Presence --> Core
+    FociState --> Core
+    Wake[wake_word.py] --> Core
+    Avail[availability.py cover / dictation] --> Core
+    Core --> Voice[realtime_agent.py real-time voice]
+    Core -->|notification + voice + lockdown| Link
+    Voice --> Speaker[Speaker]
+    Voice --> Avatar[Avatar FeatherTalk]
+```
+
+Main MQTT topics: `specter/presence/owner`, `specter/foci/state`, `specter/phone/status`, `specter/session/state`, `specter/situation/quiet`, `specter/nudge/request`, `specter/nudge/result`, `specter/phone/guard`.
+
+## Code map
+
+| Part | Files |
+| --- | --- |
+| Coordination and sessions | `specter.py`, `session_gate.py`, `session_control.py` |
+| Presence and events | `presence.py`, `camera_bridge.ps1`, `foci_state.py`, `tiled_cat.py`, `cat_alert.py` |
+| Real-time voice | `realtime_agent.py`, `foci_prompt.py`, `visual.py`, `echo.py`, `session_memory.py` |
+| Situation engine and bedtime coaching | `situation.py`, `nudge_prompt.py`, `nudge_voice.py`, `phone_guard.py` |
+| Do not disturb and wake word | `availability.py`, `wake_word.py` |
+| Phone | `android-phone/`, `phone_link.py`, `setup_phone_link.ps1` |
+| Avatar | `mini_audio_publisher.py`, `feathertalk_lab/`, `feathertalk_qinche_runtime/`, `dh_live_full/`, `dh_live_mini/` |
+
+## Quick start (Windows)
+
+You need Python, Docker Desktop, FFmpeg with DirectShow, a camera, microphone and speaker, and an OpenAI API key. The avatar needs an NVIDIA GPU plus your own model weights and character assets (none are included).
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
+Copy-Item config.example.env config.local.env
+Copy-Item frigate/config.example.yml frigate/config.yml
+docker compose up -d mediamtx mosquitto frigate
+.\camera_bridge.ps1 -CameraName 'YOUR_CAMERA_NAME' -Ffmpeg 'PATH_TO_FFMPEG_EXE'
+.\.venv\Scripts\python.exe specter.py --dry-run
+```
+
+Then edit `config.local.env`: set `SPECTER_TARGET_NAME` (your name in the Frigate face library), the microphone and speaker, and `OPENAI_API_KEY`. Every feature switch lives in that file, and the defaults are conservative:
+
+- Situation engine: `SPECTER_SITUATION_ENABLED=true` (with no delivery channel on, it only logs and never disturbs anyone)
+- Phone reminders: `SPECTER_NUDGE_PHONE=true`; strict mode: `SPECTER_BEDTIME_STRICT=true`
+- Bedtime: `SPECTER_BEDTIME`, `SPECTER_BEDTIME_WEEKEND`, `SPECTER_MORNING`
+- Extra apps that are never blocked: `SPECTER_GUARD_ALLOW_EXTRA` (comma-separated Android package names)
+- Do not disturb and wake-up: `SPECTER_COVER_DND`, `SPECTER_DICTATION_APPS`, `SPECTER_WAKE_ENABLED`, `SPECTER_BARGE_IN_MODE`
+
+**Phone**: build `android-phone/` with the Android SDK and JDK 17, then pair over USB with `setup_phone_link.ps1 -Install`. On the phone, allow usage access and set Specter Phone's battery use to Unrestricted. For lockdown, turn on the "Specter 睡前封锁" accessibility service; L4 dimming also needs "Modify system settings".
+
+**Escape hatch**: `python phone_link.py release` on the PC lifts the lockdown at once and keeps bedtime quiet until morning.
+
+## Privacy and keys
+
+- The API key, the phone pairing token and certificates live only in ignored local files (`config.local.env`, `private/`) and never enter the repository; the same goes for memory, logs and recorded voice clips.
+- Sent to OpenAI while running: conversation audio, camera stills during a conversation, reminder-text requests (only the reminder level and situation, such as a broken "going to bed" promise, minutes past bedtime, the name of the app in use, and coarse hints like "their day seems to have been draining"), and the text to be spoken.
+- The wake word is recognized entirely on the PC (the Whisper model is downloaded on first run); only a match is logged, never what was said.
+- With the camera cover closed, a black frame is never sent as if he could "see" you.
+
+## Known limitations
+
+- Developed and verified on one Windows PC and one Samsung Android phone. The built-in allow list uses Samsung and Google package names; on other brands adjust it with `SPECTER_GUARD_ALLOW`.
+- Avatar character assets, training clips and model weights are not in the repository, so a fresh clone has no ready-made character.
+- This is a source snapshot of a personal project; some paths and names keep their working-implementation form.
+
+---
+
+<!-- The author's original write-up and development log follow. -->
+
 https://github.com/user-attachments/assets/a6343550-81f4-4944-91cd-5052c0080596
 
 [Read the original in Chinese](README_zh.md)
