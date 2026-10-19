@@ -16,6 +16,7 @@ SpecterSaysHi is a companion AI that runs on your own Windows PC: part cyber-boy
 - **Wake word "Hey Specter"** ("Hi Specter" works too): recognized on the PC with Whisper; audio never leaves the machine and is not stored.
 - **You can interrupt him**: local barge-in by default (loudness after echo cancellation, so he cannot hear his own echo). Start talking and he stops.
 - **Camera bridge self-heals**: the capture process is restarted if it dies.
+- **QinChe avatar update**: an epoch-115 model trained on a new base image and a more relaxed idle loop; only the mouth is now sent as a transparent layer over the same native video, so the first frame arrives faster and colours stay stable (weights and assets are not in the repository).
 
 ## What it does
 

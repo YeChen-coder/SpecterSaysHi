@@ -37,7 +37,7 @@ services:
 
   feathertalk-qinche:
     profiles: ["feathertalk-qinche"]
-    image: feathertalk-qinche-approved:20261017
+    image: feathertalk-qinche-approved:20261019
     build:
       context: ./feathertalk_qinche_runtime
     gpus: all
@@ -48,7 +48,7 @@ services:
       QINCHE_MODE: ${SPECTER_QINCHE_MODE:-fast}
       QINCHE_BUFFER_MS: ${SPECTER_QINCHE_BUFFER_MS:-100}
     volumes:
-      - ./feathertalk_qinche_clean_20261016:/assets:ro
+      - ./feathertalk_qinche_assets_20261019:/assets:ro
     ports:
       - "127.0.0.1:18986:8080"
       - "127.0.0.1:18988:8081"

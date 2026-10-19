@@ -14,7 +14,7 @@ MODES={'fast':{'lookahead':0,'chunk_ms':40},'balanced':{'lookahead':10,'chunk_ms
 
 class Engine:
     def __init__(self,checkpoint='/work/checkpoints/last.pth',device='cuda',base_image='/work/data/base.jpg',base_landmarks='/work/data/base.lms'):
-        torch.set_num_threads(4); self.device=torch.device(device)
+        torch.set_num_threads(1); self.device=torch.device(device)
         if device=='cuda':torch.cuda.set_per_process_memory_fraction(.45)
         begin=time.perf_counter()
         self.audio=load_feather_hubert('/opt/FeatherTalk/feather_hubert.pth',self.device)

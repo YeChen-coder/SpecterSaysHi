@@ -34,6 +34,17 @@
     let transition = 0;
     let previousUrl = null;
     let rendering = false;
+    let pendingBox=null,shownBox=null,nativePlaying=false;
+    function placeMouth(box){
+      if(!box)return;
+      shownBox=box;
+      const scale=Math.min(innerWidth/720,innerHeight/1088);
+      image.style.inset='auto';image.style.objectFit='fill';
+      image.style.left=((innerWidth-720*scale)/2+box[0]*scale)+'px';
+      image.style.top=((innerHeight-1088*scale)/2+box[1]*scale)+'px';
+      image.style.width=((box[2]-box[0])*scale)+'px';image.style.height=((box[3]-box[1])*scale)+'px';
+    }
+    addEventListener('resize',()=>placeMouth(shownBox));
     document.body.dataset.mode = 'idle';
     fetch('/health').then(response => response.json()).then(health => {
       document.title = 'Specter × FeatherTalk · ' + health.character;
@@ -53,6 +64,7 @@
     function resumeIdle() {
       if (!active) return;
       active = false;
+      nativePlaying=false;
       ending = false;
       queue = [];
       const token = ++transition;
@@ -90,6 +102,7 @@
       shownIndex = -1;
       pendingIndex = -1;
       pendingPhase = 'speaking';
+      pendingBox=null;nativePlaying=false;
       image.style.transitionDuration = '0ms';
       image.style.opacity = '0';
       document.body.dataset.mode = 'speaking';
@@ -103,7 +116,7 @@
 
     function connect() {
       const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      socket = new WebSocket(`${scheme}//${location.host}/view`);
+      socket = new WebSocket(`${scheme}//${location.host}/view?protocol=2`);
       socket.binaryType = 'blob';
       socket.onopen = () => {
         if (!active && idle.readyState >= 2) status.textContent = 'Waiting for Realtime audio';
@@ -115,6 +128,7 @@
           if (control.type === 'start') startSpeech();
           else if (control.type === 'frame') {
             pendingIndex = control.index;
+            pendingBox=control.bbox;
             pendingPhase = control.phase === 'settling' ? 'settling' : 'speaking';
           }
           else if (control.type === 'settling') {
@@ -142,7 +156,7 @@
           return;
         }
         if (!active) return;
-        queue.push({blob: event.data, index: pendingIndex, phase: pendingPhase});
+        queue.push({blob: event.data, index: pendingIndex, phase: pendingPhase,box:pendingBox});
         if (queue.length > 4) queue.splice(0, queue.length - 4);
       };
       socket.onclose = () => {
@@ -174,11 +188,17 @@
         if (previousUrl) URL.revokeObjectURL(previousUrl);
         previousUrl = url;
         image.src = url;
+        placeMouth(next.box);
         shownIndex = next.index;
         image.dataset.index = shownIndex;
         image.dataset.phase = next.phase;
         document.body.dataset.mode = next.phase;
         image.style.opacity = '1';
+        const nativeFrame=Math.floor(idle.currentTime*fps)%frameCount();
+        const drift=((nativeFrame-shownIndex+frameCount()/2)%frameCount()+frameCount())%frameCount()-frameCount()/2;
+        if(!nativePlaying||Math.abs(drift)>2)idle.currentTime=shownIndex/fps;
+        if(!nativePlaying||idle.paused){nativePlaying=true;idle.play().catch(()=>{});}
+        image.dataset.nativeDrift=drift;image.dataset.transport='mouth_png';
         status.textContent = next.phase === 'settling' ? 'Returning to idle' : 'FeatherTalk live';
       };
       decoded.onerror = () => {

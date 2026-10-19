@@ -1,6 +1,6 @@
 # 秦彻独立运行工程
 
-2026-10-17，主项目新增独立 `feathertalk-qinche` 服务，使用已认可的 epoch 100 视觉模型、自然倾听底片和 `NativeFaceMatch` 嘴部局部合成。此公开目录提供程序代码与资产协议，不分发私人人物权重、底片、语音、训练素材、定位缓存、图片或预生成视频。
+2026-10-19，主项目更新独立 `feathertalk-qinche` 服务，使用已认可的 epoch 115 新底图视觉模型、放松等待 2 号底片和 `NativeFaceMatch` 嘴部局部合成。此公开目录提供程序代码与资产协议，不分发私人人物权重、底片、语音、训练素材、定位缓存、图片或预生成视频。
 
 ## 与 Gentleman 的隔离
 
@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Compose 服务 | `feathertalk-qinche` | `feathertalk` |
 | 代码与前端 | `feathertalk_qinche_runtime/` | `feathertalk_lab/` |
-| 镜像 | `feathertalk-qinche-approved:20261017` | `feathertalk-specter:local` |
+| 镜像 | `feathertalk-qinche-approved:20261019` | `feathertalk-specter:local` |
 | 角色配置 | `SPECTER_QINCHE_MODE/BUFFER_MS` | `SPECTER_FEATHERTALK_*` |
 | 外观 | `NativeFaceMatch`，模型牙齿 | 原角色的牙齿、下巴、细节与收尾配置 |
 
@@ -20,19 +20,19 @@ Dockerfile 锁定原实验环境的本地基础镜像摘要。该环境镜像没
 
 ## 资产和合成协议
 
-`compose.yaml` 把本地 `feathertalk_qinche_clean_20261016/` 挂到 `/assets`，仅允许读取：
+`compose.yaml` 把本地 `feathertalk_qinche_assets_20261019/` 挂到 `/assets`，仅允许读取：
 
 | 文件 | 作用 |
 | --- | --- |
-| `checkpoints/epoch_100.pth` | 视觉模型，正式 SHA-256 在 `engine.py` |
+| `checkpoints/epoch_115.pth` | 视觉模型，正式 SHA-256 在 `engine.py` |
 | `data/base.jpg`、`data/base.lms` | 引擎初始化参考和定位 |
-| `data/dynamic_base_natural/frames.npy` | `(251,1088,720,3)` uint8 BGR 原生帧 |
-| `data/dynamic_base_natural/landmarks.npy` | `(251,110,2)` 定位 |
-| `data/dynamic_base_natural/bboxes.npy` | `(251,4)` 下半脸 bbox |
-| `data/dynamic_base_natural/source_indices.npy` | `(500,)`，`0..250,249..1` 往返映射 |
-| `data/natural_selection.json` | 底片选择记录 |
-| `output/dynamic_natural/idle_loop.mp4` | 25 fps、20 秒、无声待机视频 |
-| `data/qinche_speech_12_v14/audio.wav` | 可选验证音频，非运行必需 |
+| `data/loop_base/frames.npy` | `(251,1088,720,3)` uint8 BGR 原生帧 |
+| `data/loop_base/landmarks.npy` | `(251,110,2)` 定位 |
+| `data/loop_base/bboxes.npy` | `(251,4)` 下半脸 bbox |
+| `data/loop_base/source_indices.npy` | `(500,)`，`0..250,249..1` 往返映射 |
+| `data/loop_base/manifest.json` | 放松等待与明确BT.709色彩记录 |
+| `data/loop_base/idle.mp4` | 25 fps、20 秒、无声待机视频 |
+| `data/test_speech.wav` | 可选验证音频，非运行必需 |
 
 另需在镜像构建目录准备对应底片的 `poster.jpg`。所有媒体、权重和数组均被公开仓库忽略。`asset_lock.json` 只有哈希，不包含资产内容。
 
@@ -58,10 +58,12 @@ SPECTER_QINCHE_BUFFER_MS=100
 ## 验证范围
 
 - `tests/test_qinche_runtime.py`：三个模式的 45 秒历史边界、时间线和会话重置，不依赖角色权重。
-- `tests/validate_qinche_runtime_gpu.py`：有私有资源的环境中运行，留出音频十秒的 250 帧预测与认可缓存最大像素差为 0；嘴周外原片保护、往返和循环边界通过。
+- `tests/validate_qinche_runtime_gpu.py`：有私有资源的环境中运行，留出音频十秒的 250 帧预测与认可缓存batch1对batch2预测最大差2/255、合成最大差1/255；嘴周外原片保护、往返和循环边界通过。
 - 已在实际主项目完成 24 kHz、100 ms 墙钟发包测试：45 秒、1,125 个连续说话帧，覆盖两次循环、打断重说、断线重连、主动关闭与正确帧号恢复待机。
 - 音频历史峰值约 4.14 秒，释放会话后归零。没有让诊断记录随会话时长累积。
 
-浏览器首帧测量从首个完整 100 ms 包发出开始：启动预热后首次话语抵达约 119 ms、显示约 158 ms；后续轮次约 45/48 ms。仅是本机少量测量，不含上游生成、首包积累或未预热模型的冷启动。
+以下是历史10月17日测量，不能代表当前115轮；当前主项目已重新测量并保存记录。浏览器首帧测量从首个完整 100 ms 包发出开始：启动预热后首次话语抵达约 119 ms、显示约 158 ms；后续轮次约 45/48 ms。仅是本机少量测量，不含上游生成、首包积累或未预热模型的冷启动。
 
 clean 目录公开的训练和预处理代码是研究参考；动态导出程序也保留历史候选分支，不是生产服务。实时认可路径以本目录的 `engine.py` 和 `NativeFaceMatch` 为准。私有训练清单、素材和预测缓存不分发，也不要通过启动训练入口来运行主项目。
+
+当前传输：只发送嘴部透明PNG，身体与背景始终显示同一原生视频；`/view?protocol=2`，升级后刷新。当前正式首帧后六轮中位数约24.75ms抵达、63.55ms绘制，不含上游音频生成和攒包。主项目同帧截图实际嘴部支持范围之外变化像素0。

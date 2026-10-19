@@ -1,4 +1,4 @@
-"""QinChe approved 2026-10-17 pipeline. No Gentleman appearance code."""
+"""QinChe approved 2026-10-19 pipeline. No Gentleman appearance code."""
 import hashlib
 import json
 import time
@@ -11,7 +11,7 @@ from stream_core import Engine
 from face_utils import crop_face, extract_inner, mask_mouth, reshape_audio_feat, hwc_to_chw_tensor
 from native_face_match import NativeFaceMatch
 
-CHECKPOINT_SHA = '7c44912c27f52ff84fdc632c63446d9a835c6aa1915c1ecb7d2a0251786feace'
+CHECKPOINT_SHA = '007975c1ecda2870144d3f150e4c98d3caab1ee422045d904213a457052730b7'
 
 
 class QinCheEngine(Engine):
@@ -25,7 +25,7 @@ class QinCheEngine(Engine):
                     hasher.update(chunk)
                 if hasher.hexdigest() != digest:
                     raise RuntimeError(f'QinChe approved asset changed: {name}')
-        self.checkpoint_path = root / 'checkpoints/epoch_100.pth'
+        self.checkpoint_path = root / 'checkpoints/epoch_115.pth'
         self.checkpoint_sha = hashlib.sha256(self.checkpoint_path.read_bytes()).hexdigest()
         if self.checkpoint_sha != CHECKPOINT_SHA:
             raise RuntimeError('QinChe checkpoint differs from the approved handoff')
@@ -33,7 +33,7 @@ class QinCheEngine(Engine):
                          base_landmarks=root/'data/base.lms')
         torch.set_num_threads(1)
         cv2.setNumThreads(1)
-        data = root/'data/dynamic_base_natural'
+        data = root/'data/loop_base'
         self.frames = np.load(data/'frames.npy', mmap_mode='r')
         self.bboxes = np.load(data/'bboxes.npy')
         self.landmarks = np.load(data/'landmarks.npy')
@@ -43,13 +43,13 @@ class QinCheEngine(Engine):
                 or self.landmarks.shape != (251, 110, 2)
                 or self.bboxes.shape != (251, 4)
                 or not np.array_equal(self.source_indices, expected)):
-            raise RuntimeError('QinChe natural-listening timeline/cache is invalid')
+            raise RuntimeError('QinChe relaxed-waiting timeline/cache is invalid')
         self.count = len(self.source_indices)
         self.references = np.asarray([extract_inner(crop_face(f, tuple(b)))
                                       for f, b in zip(self.frames, self.bboxes)])
         # Match the approved exporter exactly, including CPU float normalization.
         self.inputs = torch.stack([torch.cat([hwc_to_chw_tensor(r.copy()),
-            hwc_to_chw_tensor(mask_mouth(r.copy()))],0) for r in self.references]).to(self.device)
+            hwc_to_chw_tensor(mask_mouth(r.copy()))],0) for r in self.references]).contiguous().to(self.device)
         self.matcher = NativeFaceMatch()
         self.prepared = [self.matcher.prepare(f, p, b)
                          for f, p, b in zip(self.frames, self.landmarks, self.bboxes)]
@@ -58,7 +58,7 @@ class QinCheEngine(Engine):
         self.composite_frames = 0
         self.teeth = None
         self.begin(0)
-        self.idle_video_path = root/'output/dynamic_natural/idle_loop.mp4'
+        self.idle_video_path = root/'data/loop_base/idle.mp4'
         self.idle_poster_path = Path('/runtime/poster.jpg')
         if not self.idle_video_path.is_file():
             raise RuntimeError('Approved silent QinChe idle video is missing')
@@ -95,10 +95,11 @@ class QinCheEngine(Engine):
         return image, prediction
 
     def health(self):
-        return dict(character='QinChe', runtime='qinche-approved-20261017',
+        return dict(character='QinChe', runtime='qinche-newbase115-approved-20261019', selected_epoch=115,
             checkpoint=str(self.checkpoint_path), checkpoint_sha256=self.checkpoint_sha,
-            base_version='natural_listening_01', base_frames=self.count, unique_base_frames=len(self.frames),
-            width=720, height=1088, fps=25, compositor='NativeFaceMatch',
+            base_version='relaxed_waiting_02', base_frames=self.count, unique_base_frames=len(self.frames),
+            width=720, height=1088, fps=25, model_image_size=144, compositor='NativeFaceMatch',
+            frame_transport='mouth_png', viewer_protocol=2, native_background_layer='continuous_video', idle_color_space='bt709',
             teeth_mode='model', teeth_restored_frames=0, detail_profile='original',
             composite_last_ms=self.composite_last_ms,
             composite_mean_ms=self.composite_total_ms/max(1,self.composite_frames),

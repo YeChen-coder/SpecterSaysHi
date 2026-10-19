@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from realtime_session import RealtimeLoopSession
 from streaming_resampler import StreamingResampler24To16
 from frame_stream import iter_frames
+from frame_encoding import encode_frame, frame_metadata
 from engine import QinCheEngine
 
 engine = QinCheEngine()
@@ -61,7 +62,7 @@ def preview():
 
 @app.get("/character-test.wav")
 def character_test_audio():
-    return FileResponse('/assets/data/qinche_speech_12_v14/audio.wav', media_type='audio/wav')
+    return FileResponse('/assets/data/test_speech.wav', media_type='audio/wav')
 
 @app.get("/poster")
 def poster():
@@ -108,11 +109,9 @@ def infer(session, raw, final=False):
     pcm = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
     restored_before = session.teeth_restored_frames
     for index, image in session.push(pcm, final):
-        ok, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        if not ok:
-            raise RuntimeError("FeatherTalk JPEG encoding failed")
+        encoded = encode_frame(engine,index,image)
         frames_rendered += 1
-        yield index, jpeg.tobytes()
+        yield index, encoded
     teeth_restored_frames += session.teeth_restored_frames - restored_before
     peak_pcm_samples = max(peak_pcm_samples, session.peak_pcm_samples)
     current_pcm_samples = len(session.pcm)
@@ -158,7 +157,7 @@ async def publish(ws: WebSocket):
         global latest
         async for index, image in iter_frames(infer(session, raw, final)):
             latest = (index, image)
-            await broadcast({"type": "frame", "index": index}, image)
+            await broadcast(frame_metadata(engine,index), image)
 
     try:
         await broadcast({"type": "reset"})
@@ -236,19 +235,22 @@ async def publish(ws: WebSocket):
 async def view(ws: WebSocket):
     global requested_frame
     await ws.accept()
+    if ws.query_params.get('protocol')!='2':
+        await ws.close(code=1008,reason='Refresh viewer for mouth-only transport')
+        return
     viewers[ws] = asyncio.Lock()
     try:
         if active:
             await send(ws, [{"type": "start"}])
             if latest is not None:
-                await send(ws, [{"type": "frame", "index": latest[0]}, latest[1]])
+                await send(ws, [frame_metadata(engine,latest[0]), latest[1]])
         while True:
             event = await ws.receive()
             if event["type"] == "websocket.disconnect":
                 break
             if event.get("text"):
                 control = json.loads(event["text"])
-                if control.get("type") == "sync" and isinstance(control.get("frame"), int):
+                if control.get("type") == "sync" and isinstance(control.get("frame"), int) and not sync_event.is_set():
                     requested_frame = max(0, control["frame"]) % engine.count
                     sync_event.set()
     except (WebSocketDisconnect, RuntimeError, json.JSONDecodeError):
