@@ -1,5 +1,9 @@
 # SpecterSaysHi · 项目说明
 
+https://github.com/user-attachments/assets/7dc4ba4c-2d0f-49fd-842e-c6d82f97d2a4
+
+*一镜到底的实机会话：他打招呼、聊天，听懂中文后用英文回答，说到一半被打断。数字人的嘴是根据他的语音实时生成的；女声是 TTS，当作麦克风输入送进去。仓库里的文件：[docs/demo/specter-demo.mp4](docs/demo/specter-demo.mp4)*
+
 > 这一节是结构化的项目说明：它能做什么、怎么搭起来、怎么用，以及最近更新了什么。
 > **作者原文、吐槽和开发日志在分隔线之后，保持原样**，新的日志继续追加在文末即可。
 > English version: [README.md](README.md) · 详细技术文档：[TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md)

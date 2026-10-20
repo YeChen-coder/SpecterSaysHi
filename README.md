@@ -1,5 +1,9 @@
 # SpecterSaysHi · Project overview
 
+https://github.com/user-attachments/assets/7dc4ba4c-2d0f-49fd-842e-c6d82f97d2a4
+
+*One continuous live session: he greets, chats, answers a Chinese line in English, and gets interrupted mid-reply. The avatar's mouth is generated in real time from his voice; the woman's voice is TTS fed in as the microphone. File in the repo: [docs/demo/specter-demo.mp4](docs/demo/specter-demo.mp4)*
+
 > This section is the structured overview: what it does, how it fits together, how to set it up, and what changed recently.
 > **The author's original write-up, rants and development log follow the divider below, unchanged.**
 > 中文版：[README_zh.md](README_zh.md) (the Chinese development log is the most up to date) · Full technical guide: [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md)
