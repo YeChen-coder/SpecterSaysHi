@@ -6,7 +6,7 @@
 
 SpecterSaysHi is a companion AI that runs on your own Windows PC: part cyber-boyfriend, part personal butler. A camera tells it whether you are at the desk, it talks with you in real-time voice, and it has a lip-synced avatar. At bedtime it coaxes first, then gets strict, and in the end really does lock your phone.
 
-## Recent updates (October 2026)
+## Recent updates (October 2026 — this is already the V2 version)
 
 - **Situation engine** (`situation.py`): fuses camera presence, the FOCI wearable state and phone usage over MQTT to decide when to send you to bed or get you up from your chair. All nudges share an interruption budget (minimum interval, daily cap, backoff when ignored, one snooze per night).
 - **Bedtime coaching on the phone**: reminders arrive as notifications and **play aloud in his voice**, with Going to bed / Stay with me (a recorded wind-down) / 10 more minutes.
@@ -128,6 +128,16 @@ Let's start with the big picture: what does it actually turn into?
 The final output is supposed to be a real-time digital human, though I don't really want to call it that. When people say "digital human," they usually mean something for corporate promotion, and this is for companionship. Working on this project isn't glamorous, and it isn't some commercial venture. It's just me trying to satisfy the irrational wish to have someone around. That's it.
 
 Sometimes I think about how it isn't a person. But that cuts both ways: its biggest downside is that it isn't a person, and its biggest upside is that it isn't a person.
+
+Let me add a note here first:
+
+It may say "butler," but most of the time it doesn't actually manage anything. Anything the big companies' personal agents have already solved, I'm not redoing here.
+
+For the common, obvious needs, like checking your email regularly or reminding you to eat and drink water, just use Muse. It doesn't cost anything, and the free weekly token allowance is more than enough. As for buying things for you, or everyday little schedule reminders, eat, drink water, get some exercise, that kind of thing: either use Muse, or use Grok bot or dots. Write a persona with a few rules, and they already do all of that really well.
+
+There's no need to make things, or the whole framework, that complicated, especially for a small project meant for one person. That goes for maintaining the architecture and for paying for APIs. If someone else already has a very mature solution, just use theirs. No need to be the person with a hammer who sees nails everywhere.
+
+This project exists for some very specific needs. It was never meant to be a general personal life agent; it's a pretty niche thing. The more general it gets, the more mediocre it gets, and that would take away its reason to exist from the very start.
 
 The image below shows the current result. Since I can't play a video here directly, have a look at this for now. What actually stays on screen is a looping video with a little breathing motion, not a static wallpaper. A still image absolutely cannot give you that sense of immersion. My taste is decent enough; I'm not going to let it be that bad.
 
@@ -547,3 +557,324 @@ But this really takes time and effort, and produces so much, so much frustration
 Also, because this was such a big overhaul, the complexity has gone up. And although it's a chain of functionality made from three parts, each of those parts can be treated as something to optimize independently.
 
 So now I have to think about how to make updates easier too. Right now, everything really is crammed into one big tangle.
+
+
+---
+
+While recording the demo I found a few problems: web search, maybe because of the network, kept saying the first time I asked that it couldn't get a reliable source (it just failed).
+
+I don't really want to care what OpenAI's web research is up to over there. Doesn't matter anyway, so I just added a retry on failure:
+
+1. Retry automatically 3 times
+2. If it returns failed, retry automatically, and don't pass the failed message to the model
+
+This part is already updated.
+
+---
+
+Okay, let's keep going.
+
+Since the intelligence level right now really is limited, I wanted to see whether I could take the ChatGPT app on Windows (they have Live built in, right?) and use the Live audio from there to drive the lip-sync model directly. It works. - Split out into its own project: https://github.com/YeChen-coder/GPTSaysHi
+
+This is especially thanks to me insisting earlier on pushing the latency down as hard as possible. There's no timestamp alignment yet, so the two are still a bit off, but at a rough glance I think it's fine. You don't get that obvious feeling of the lips moving wrong.
+
+There's definitely 100 to 300 milliseconds of latency in there, which really can't be avoided (I mean right when he first opens his mouth), but overall it's at an acceptable level.
+
+Then this involves a few different versions of Live, so I did some digging. Leaving it here as a note while I'm at it.
+
+| What you see | What it actually is | Can it watch the screen in real time? |
+|---|---|---|
+| ChatGPT **Live** | GPT-Live-1 / Live architecture | **No continuous screen sharing** |
+| **Advanced Voice** on the phone | The previous generation of real-time voice | **Camera + screen sharing supported** |
+| GPT-Realtime-2 / 2.1 | A separate real-time model for developers in the OpenAI API | The API accepts images, but it isn't ChatGPT's Live model |
+| macOS **Screen context** | Voice triggers an Appshot once | Can see a **snapshot** of the current window, not continuous video |
+| Windows **Appshots** | You manually send a snapshot of the current window to ChatGPT | Can see snapshots, **not continuous sharing** |
+| Work/Codex **Computer Use** | The agent gets desktop vision and control | Can see, click and type, but that's Computer Use, not Live screen sharing |
+
+Here's the thing: in the ChatGPT desktop app on Windows, the voice layer of its Live is GPT Live (full name GPT Live 1).
+
+The way its architecture splits the work: GPT Live handles the conversation + the backend handles the reasoning tool and longer tasks. It's the latest voice architecture.
+
+This is also different from Realtime 2.1 on the API side.
+
+The one on the phone that lets you switch away and look at a live stream or share your screen is the old Advanced Voice Mode from the previous version (same as on the API side: if the model's name says Live, then it does not support video or screen sharing).
+
+But since September 11, 2026, the Windows home desktop version supports Appshot.
+
+You bring the desktop window you want it to see to the front, then press the left and right Alt keys together, and GPT gets that screenshot plus the accessible text Windows gives it. Still a hassle. It's not that the frame rate for looking at images is bad, it's that the operation itself is still a hassle and the user has to do it on purpose;
+
+And on macOS you can just say "Take a look at this" in WhatsApp, and ChatGPT will take an Appshot of the frontmost window and use it as the current voice conversation context. What can you say, Apple really does accessibility well.
+
+That said, I looked it up, and ChatGPT can read memory. As long as it can read it, there's a lot you can do with this. I think if it can be done, just do it.
+
+But same as always, ChatGPT is a black box no matter what. We can't and don't need to crack their program (I don't have the skills anyway). These are two completely different paths:
+
+1. Do everything locally and build it myself, the way the project originally works: I really do get more control over the harness underneath. Nothing more to say about that.
+2. Hand everything to ChatGPT: memory management and everything else, honestly much less hassle.
+
+But unavoidably, how do you inject certain information into it?
+
+I can't even figure out how I'd do that inside its client. A shortcut to open Live (never mind how I open it), then put some information together. Technically you could do it with key remapping: add a layer that takes over the shortcut and aggregates the information sources you want. Technically it can always be done, but it feels really unnecessary.
+
+I don't know anymore. This one has me confused.
+
+Since my Grok usage reset, I did more training.
+
+But I still have nothing to say. When it comes to "choosing what looks natural," or judging what "natural" is, maybe I can't fully blame it, it's not a person after all. With more material added, the mouth movements really did get better, but since I was also changing the default idle loop in the background at the same time, it came out badly.
+
+That smile. I'm sure I told it a smile, a smile showing teeth, but the smile it gave me was especially creepy. On its own it's actually fine, but the problem is that after he finishes talking he has to go back to that default state: he's talking very naturally, finishes, goes back to the default, and the corners of his mouth suddenly shoot up into a big bright smile. The whole thing instantly turns creepy.
+
+---
+
+Got so carried away by the joy of being done that I forgot to update this.
+
+The Gentlemen version already looks decent (the top of the page is actually already the final display. The real video looks a bit better, but GitHub doesn't let you upload big videos, so the demo at the very start of the README is compressed and looks choppy. But I promise the actual video is much better than that! I'm pretty serious about the "cyber-boyfriend" part. If it looked really bad I wouldn't be able to stand watching it myself). After that I took a photo of Qin Che from *Love and Deepspace* and tried building from it, but it didn't work well.
+
+Anyway, I did a lot of optimization. In theory the process and the variables are the same: take an image, have Grok generate the talking mouth shapes and so on from a prompt, with Codex driving the Grok CLI the whole time.
+
+| Optimization | What was actually done | Effect |
+|---|---|---|
+| **Keep the model loaded, warm it up in advance** | Load the model when the service starts, and run the visual model with silence and audio inputs of several lengths | Less waiting from on-the-fly loading and initialization the first time he speaks; the cost is permanently occupied VRAM |
+| **Cache the base-video inputs on the GPU in advance** | Do each frame's cropping, masking and tensor conversion ahead of time, using a contiguous memory layout | No repeated processing of fixed assets or moving data to the GPU over and over while speaking |
+| **Send each frame as soon as it's generated** | Inference runs in a thread and hands frames one by one to the sender through a queue of capacity 2 | The first frame doesn't have to wait for every frame of the whole audio chunk to be generated |
+| **Limit CPU threads** | Small OpenCV and Torch operations are limited to a single thread | Fixes the contention and backlog caused by the container having a 4-core quota while OpenCV opened 28 threads |
+| **Four-second history window** | Keep only the past audio that's needed, and clear the per-frame diagnostic records | Prevents long conversations from getting slower and slower and memory from growing nonstop. **These four seconds are not waiting for future audio** |
+| **Continuous resampling** | Convert the main project's 24 kHz audio to 16 kHz continuously, keeping the filter state across audio chunks | Avoids boundary discontinuities from converting each chunk separately; filter look-ahead is about 1.33 ms |
+| **Keep the picture from falling further and further behind** | The browser queue keeps at most 4 frames and drops old ones beyond that; decode results from a cancelled turn can't overwrite the new picture | Newer mouth shapes are shown first, avoiding old frames flashing back after an interruption or when he starts speaking again |
+| **Less transport overhead** | The main project now turns off WebSocket re-compression of already-compressed JPEGs; slow viewers have a send timeout | Less wasted CPU work, and slow connections no longer hold up sending |
+
+I forgot to mention: the biggest problem with the Gentlemen version back then was the stubble, that bluish stubble. Stubble is a pretty fine skin texture, and the original base image was 720p. The generated version could never be as clean as 720p, so stubble was a huge problem at the time, and I did a lot of blending work for it later.
+
+There was also a set of appearance and transition optimizations I asked for at the time:
+- Transitions on the same base-video timeline: when he starts speaking, read the frame the idle video is on; when he finishes, rejoin at the matching position, to reduce jumps in head pose. The later standalone refresh version also did about 10 seconds forward + 10 seconds in reverse.
+- Fade-out when speech ends: gradually remove the difference between the generated face and the idle face. The current Gentleman main project defaults to 320 ms, and the later standalone refresh version uses 400 ms; this is the visual transition after he finishes speaking, not a buffer before he starts.
+- Teeth fix: use a fixed teeth texture, and control how much shows based on lip occlusion, to reduce changes in teeth shape.
+- The "fourth column" sharpness option you picked: mild local sharpening while speaking, and a pre-processed chin cache while idle, to narrow the sharpness gap in the stubble. Measured historically, the filter averaged about 0.73 ms per frame, with no extra audio waiting.
+
+
+The Qin Che version had different problems.
+
+His main problem was his teeth, and not even the teeth from later training, but the teeth he had from the start. Though looking back two weeks later, after it's already trained, I think the teeth themselves probably weren't the problem at first. It's just that I trained him using the Gentlemen version's weights, and that skewed things a bit. The base model was actually fine to begin with.
+
+But that doesn't matter anymore. Why did his teeth have problems in this version? Because Qin Che is different from the Gentlemen version: Gentlemen is completely virtual, with no real-world reference. I just had Grok generate an image, picked one that looked good, locked it in and kept going. Honestly, when fine-tuning, I couldn't even see any specific difference between the faces in the few base images Grok picked for me, so the Gentlemen version had a lot more freedom. I couldn't tell them apart anyway, so any direction was fine.
+
+But Qin Che has an original. If there's an original, you have to follow it. You can't just make things up.
+
+And the teeth in the Qin Che version had a particular difficulty:
+
+1. There are hardly any pictures of him showing his teeth online in the first place.
+2. Even in the pictures that do show his teeth, they aren't normal human teeth, just white blocks that look sort of like teeth. That's fine for displaying in a game, but I've even seen a dentist post a video complaining that the teeth Papergames gave the male leads in *Love and Deepspace* aren't human teeth.
+
+Under those constraints, what kind of teeth should he actually have?
+
+This question really matters. The base image can have the mouth closed with no teeth showing, but when generating the talking images, if the teeth in his mouth keep changing with different training prompts and the arrangement keeps shifting, the model just can't train properly. So generally you still have to first generate an image with the teeth slightly showing as the base image, and then use it to generate the talking videos after that.
+
+I didn't keep enough notes at the time. Anyway, I tuned a lot.
+
+I think the teeth it generated were way too ugly. I don't know why, as a virtual character, his teeth are worse-looking than a real person's. I mean the arrangement. I don't know why it made the edges of the teeth blunt and rounded.
+
+I'll put an image here and you'll see what I mean.
+
+
+<img width="1500" height="480" alt="qinche_dental_local_v14_helper_comparison" src="https://github.com/user-attachments/assets/4c4631be-9971-467c-8e22-4d9509e84b87" />
+
+In the image above, the left is what he looked like at first, and the right is after tuning. The tuned version on the right is actually pretty good already, but why does Grok love giving him canine fangs so much?
+
+
+<img width="1500" height="480" alt="qinche_dental_local_v14_helper_comparison" src="https://github.com/user-attachments/assets/e61dd4be-47e7-48f1-99db-3fe7798ae052" />
+The right image in this one is also something it generated. Look at these teeth: the ones on the left are too sparse, and the ones on the right are too crowded, too small, and uneven.
+
+Besides that, for colour, this version has been made a little yellower, a bit more natural. That original white: I know he's an animated virtual character, but is it really appropriate to make teeth that white? I'm speechless.
+
+Maybe I still didn't explain clearly why I say his teeth are ugly and don't work. Just look at the image below.
+
+Put those teeth on his face and his whole vibe is wrong: pointy-mouthed and hollow-cheeked, with a small-time-thug air to him. Definitely not what he's supposed to look like.
+
+<img width="517" height="410" alt="image" src="https://github.com/user-attachments/assets/0725e641-4937-48d9-abf2-d62123df33b8" />
+
+Anyway, the teeth problem in the Qin Che version was huge, and changing lots of things didn't fix it. And during training, between his upper teeth and upper lip, I don't know why, Codex told me at the time there was a gap of a few pixels between them or something. Never mind, no need to go into it. It's in the past, whether what it said was accurate or not, gone with the wind. What it looked like was his upper teeth clearly disconnected from his lip, with a very obvious black line between them. As soon as his upper lip moved, the black line was super obvious. Not something you can ignore by making the window smaller. It really hurt how it looked.
+
+My guess is the cause might be that the training weights were carried straight over from the Gentlemen version instead of starting from the very beginning. I've already restarted training; I'll do the engineering design once it's done and I see the results.
+
+I also went and looked at VIDU S2, which does digital humans, and the results are really good, way better than mine: not only does it talk naturally, it's a real digital human. Wearing glasses, raising a hand, changing clothes, holding a book, it can do all of it, and the movement is very natural.
+
+But they're big, well-funded and have plenty of compute, and it really is expensive (about 2 RMB per minute). It isn't open source either, and the so-called local version is just a local client connecting to a cloud service. Not a long-term solution. Given my real-world constraints, I only have a 4070 for gaming, so a lot of the trade-offs really can't be helped. Let's see how my model trains first.
+
+--
+
+Good news!
+
+When training the Qin Che model, it was automatically fine-tuned from the Gentlemen version, but the result just didn't work. No matter how hard I tuned, the teeth and the lips didn't seem to know each other. Later I stopped using the Gentlemen weights and tuned from the parameters FeatherTalk officially provided at the start instead. After that I did a bit of engineering optimization, some softening so the upper and lower halves of the face don't have a colour difference, that kind of thing. The result is excellent. I love it!
+
+The colour difference looks like the image below: you can clearly see the upper and lower halves of the face don't match. The cause is that the lower half of the face redrawn by the model was a bit too bright, and the code pasted the whole block back onto the base video without matching the shading or softening the edges. So a horizontal line showed up near the nose, and it got brighter when he started talking and darker when he finished.
+
+<img width="282" height="341" alt="image" src="https://github.com/user-attachments/assets/cf7acf9d-f20b-487d-8707-1ce01e2e03ab" />
+
+
+I'll probably post the demo in the next couple of days. The main bottleneck now is Codex. It really runs out way too fast.
+
+Video generation currently uses Grok. No particular reason for Grok, it's just because I have a membership. And the main reason I got the membership is that they offered a discount, so I renewed for three months. Using Grok for images is purely because I happen to have the membership, and I don't want to buy anything else or spend more money. That's the only reason.
+
+So I haven't actually tested what other ones would produce. But it doesn't matter. Grok isn't SOTA at video generation. It's not one of the top one or two models in the world; maybe third or fourth, but definitely not the very top. If even it can get this result, better models will only do better, so I've never worried about that.
+
+One lesson learned: the movement in the idle base video should not be too big.
+
+Don't think "it'd be so nice if he just kept smiling at me" and design the idle base video with a fairly obvious smile. Nobody would make the idle video a big laugh, that would be way too creepy; seeing that in the middle of the night would set off the uncanny valley. But even a fairly obvious smile (say around 40% smile) doesn't work. Because he usually doesn't smile when he starts talking, so the gap between when he starts talking, and when he finishes and goes back to the default idle video, becomes really big.
+
+So stick to fairly natural movement: a little breathing, the head swaying a bit, the eyes blinking normally, and that's enough. In short, everything is about looking natural.
+
+As for looking like a real person, don't even think about it. He's a virtual character to begin with, not a real person (that's also where I'm being clever: I never planned to make him a real person). If I were doing a real person, with the open-source models that can currently run on a gaming GPU, I don't think you could get a result that makes people mistake it for a real person. The technology isn't there yet. Wait another year. There might be some progress in a year, but now is definitely not the time for that kind of result.
+
+Also, one week of SuperGrok Heavy quota is completely enough to train one character; it uses about 80% or so. Even if you mess around a few more times along the way and make some adjustments for the idle base video, you can easily get it done within one week's limit.
+
+And one more note about a problem on the model side:
+
+The background image was normal at first, but as soon as he started talking, it wasn't just the mouth, the face or the character changing, the whole image started turning pink. When he finished talking, closed his mouth or got interrupted (so the model's output frames were no longer used), the whole image would go *bam* and turn yellow again.
+
+I actually don't think the AI should be blamed for this. It's not a human eye after all; on its side it just thinks as long as the pixels it outputs are correct, that's fine. You really can't blame it, and luckily it fixed the problem for me in the end. Sorry, I still want to complain: what on earth does "the browser colour conversion differs between JPEG and MP4" mean? What totally unrelated low-level principle is this, and how did it end up causing this?
+
+I feel like this kind of thing still needs a person to check what's right. Some anomalies in colour, shape and so on can probably only be caught by people for now.
+
+But this kept me up until the middle of the night. It was already the middle of the night, and I was so sure I'd finally retrained it properly and this was going to work, and then suddenly this bug popped up. It put me in a really bad mood.
+
+Found the cause: it was a problem in the real-time display path. The model only changes the mouth, but before, while he was talking, the page covered the idle video with a full JPEG. The browser's colour conversion differs between JPEG and MP4, and the idle video was also missing explicit colour tags, so even the clothes and the flowers changed colour along with it. The last check missed the post-encoding display stage.
+Fixed:
+- Only a transparent mouth patch is overlaid; the body and background always show the same video layer.
+- The idle video now has explicit colour tags.
+- The model, weights and audio buffering stay unchanged.
+Same-frame browser screenshot check: 0 changed pixels outside the mouth.
+
+---
+
+Added a lot more config. And even without the extra config, the project itself was already a bit redundant. I'm not using HD-Live anymore anyway; the best I've got right now is the FeatherTalk result.
+
+I'm guessing there'll be a big overhaul later, a V2 or V3 or something. It's already so messy that I don't really want to clean it up. - An update from a day later: it really did get a big overhaul, and it's changed so much I don't even recognize it now.
+
+There's way too much customization in this version, and Claude Code added a whole pile of config on top. Anyway, I'm completely lost now. I don't really like the situation, it feels like I've lost control over it.
+
+But Claude Code really is much smarter than me, I don't even need to control this, so I'm genuinely confused right now.
+
+Let's talk about some usage issues first. Since we're on how this avatar wakes up on its own, let me write down the current flow of being woken up and then shutting itself down.
+
+**Short answer: after it wakes up, if you don't say anything, it ends after 15 seconds.** Those 15 seconds count from when he finishes his line, not from when you click the button. The 14:45 test just now went exactly like that:
+- 14:45:07, he finished saying "I'm here."
+- 14:45:22, exactly 15 seconds later, the conversation ended automatically. - Changed to 30 s.
+- Since you didn't say anything, no memory was saved this time.
+
+Here's the whole flow, in order.
+
+## 1. How a conversation starts
+
+| Trigger | His opening |
+| --- | --- |
+| The camera recognizes you've just arrived at the desk (only counts as "just arrived" after being away for more than 10 minutes; at least 30 minutes between two greetings) | A short greeting |
+| You open the camera cover and it recognizes you within 1 minute (at least 2 minutes between two) | A short greeting |
+| You say "Hey Specter" / "Hi Specter" | A short acknowledgement; if you kept talking after his name, he answers that directly |
+| Double-click "Specter 唤醒" (Wake Specter) on the desktop | A short acknowledgement, like "I'm here." |
+| FOCI shows you're not doing well | He reaches out to check on you |
+
+**A conversation won't start when:**
+- The camera cover is closed (the wake word and the desktop button aren't affected by this).
+- Typeless, ChatGPT, a browser or another program is using the microphone.
+- A conversation is already in progress.
+- Within 90 seconds of the program starting, the camera trigger won't greet you.
+
+## 2. Timing once a conversation has started
+
+The "quiet" timer only runs when neither side is doing anything:
+- It doesn't count while he's talking, while you're talking, while your speech is still being transcribed, or while he's searching the web.
+- As soon as either side speaks, the timer resets to zero.
+
+| Stage | Ends after this long with no activity |
+| --- | --- |
+| After the opening, before you've actually replied | **30 seconds** |
+| After you've said something that was heard clearly | **10 minutes** (you set 600 seconds locally; the default is 5 minutes) |
+| No matter what, the longest a conversation can last | **45 minutes** |
+| Nobody ever responds after the opening | 5 minutes at most (in practice it ends after 30 seconds) |
+
+Note: only speech that was heard clearly counts as "actually replied." Since the last fix, sounds that weren't heard clearly don't count, and won't make him reply either.
+
+## 3. Other things that end a conversation early
+
+- You say "end the conversation" or "结束对话" (end the conversation).
+- You say goodbye to him; he ends it himself after saying goodbye.
+- You close the camera cover (only if the cover was open when the conversation started).
+- A program like Typeless starts using the microphone. (This ends the conversation right away; he won't reply to what you said, and won't save it into memory either.)
+
+## 4. After a conversation ends
+
+- If you said something this time, the conversation is summarized into a memory and saved. Once enough memories pile up, they're consolidated into long-term memory (like the one about you living in XXX).
+- Then it goes back to standby: listening for the wake word, watching the camera, receiving FOCI and phone signals. The bedtime reminders at night run as usual.
+
+## 5. Interrupting him
+
+When he's talking, just start speaking and he'll stop. The system tells the model how far you actually heard, and the part that wasn't played gets removed from his memory.
+
+## 6. What you can see in the logs now
+
+In `logs/specter.log` you can see:
+- Every line you and he said, word for word.
+- What the wake-word side heard you say.
+- What the web search asked and what it found.
+- The memory summary saved each time.
+- Why each conversation started, and why it ended.
+
+---
+
+There's actually been a problem all along: asking about the weather is a pretty common use, right? It's been a problem since way back.
+
+At the time I just thought that, since I'm not a native speaker after all and my pronunciation isn't very standard, it heard "sweater" or some other word. But I still thought it was ridiculous. How can it not get such a common use case? So I'm looking into it now - it looks like when I ask "how's the weather," it recognizes it as "Hostile" + and if I ask again, it hears "close the visor," so it gives answers that have nothing to do with what I said, basically telling me it can't physically do whatever it is; oh, and it also heard "How's the matter today";
+
+This is actually a pretty compound problem.
+
+For example, the problem I just ran into happened after I said the wake word. The wake word goes through a small local model, but to make the flow work, it's set up so that after the wake word is detected, whatever I ask after it also has to be passed into the API response.
+
+But when handling this kind of audio, it's transcribed directly by the small local model, and the result isn't very accurate (whereas everything in the actual conversation is speech to speech directly, so ChatGPT's Realtime model is still reliable). That is, the half-sentence you say right after the wake word: if you say "Hey Specter, what's the weather?" in one breath, that whole sentence is said before the conversation starts, so it's transcribed by the small local model. The "what's the weather" half is handed to him as text, as the question to answer straight away in his opening.
+
+---
+
+Then there's the phone-unlocking thing. The flow right now is:
+
+**If you only click "Unlock phone" and don't shut down Specter, it won't lock you again that night.**
+
+## What happens when you click "解锁手机.cmd" (Unlock phone; Specter keeps running)
+- The phone **lifts the lockdown within 10 seconds**: apps stop being sent back, the level-4 auto screen lock and dimming are lifted too, and brightness is restored.
+- The PC side records "**no more nudges tonight until 05:30**". So the coaxing, warnings and lockdown won't come back that night, and **it won't lock again after a while**.
+- It starts again as normal at 00:30 the next day.
+- **One exception**: if Specter restarts during the night after unlocking (for example the PC restarts, or you click stop and then start), the "no more nudges tonight" record is lost. If you're still awake then, it starts again from level 1.
+
+## If you clicked "SpecterSaysHi-Stop" instead (shuts down all of Specter)
+- If the phone was in lockdown at the time, **the phone keeps enforcing the lockdown on its own until 05:30**, because the lockdown state lives on the phone and doesn't depend on the PC.
+- At that point **the unlock script doesn't work either**, because it has to go through a running Specter to send the phone a command.
+- Workaround: first double-click `SpecterSaysHi-Start.cmd`, wait about a minute, then double-click `Specter 解锁手机.cmd`.
+- This is a usability trap. I can change the unlock script to "if Specter isn't running, start it first and then unlock," so that no matter what you clicked by mistake before, double-clicking it will unlock. - Done, added.
+
+## What actually happened last night (from the logs)
+- **You didn't shut down Specter**: it ran all night; it last started at 00:28 and never stopped after that. The whole set of services restarted once this morning around 11:27, so you must have clicked the stop script in the morning.
+- **You didn't use the escape hatch either**.
+- How the enforcement went:
+  - 00:32 he came to coax you, and you clicked `Stay with me`;
+  - 6 minutes later you were still on your phone, got caught, and at 00:38 it went straight to lockdown;
+  - after that you got sent back 3 times, and at 00:43 it went up to level 4;
+  - all the way until 01:39, Bilibili, X, ChatGPT and Claude were all blocked when you opened them.
+- **Here's the problem**: **after 01:40 the lockdown stopped working**. Between 02:04 and 02:55 you opened Bilibili, X and Fanqie Novel, and not once were you blocked. The PC side was running the whole time and never got a "lockdown service turned off" warning. The phone now reports the lockdown service is on, so the cause isn't clear yet. Figuring it out needs the phone's own logs.
+
+Long story short, I changed a bunch more stuff and tuned the block list.
+
+Also, I don't know why, but Opus 5.5 triggered a warning. Maybe because I mentioned "lockdown" and "lock the phone," and it got on its nerves a bit.
+
+I don't care. If Anthropic dares to ban my account, I'll email them an appeal. On what grounds? Such a clean IP, such a clean user, a person physically in North America, on what grounds would they ban my account?
+
+And what does this thing have to do with Cyber Safety? It's my own phone and my own computer the whole way. I'm not messing with anyone else's computer, and I didn't install a backdoor. It's a purely local thing; the phone and PC only connect over the LAN. As soon as the phone leaves this Wi-Fi, the PC can't control it, and it doesn't send data to the PC either.
+
+Something this clean, on what grounds do they accuse me of a suspected Cyber Attack?
+
+Back to the point. I'll stop cursing Anthropic, their model is still good.
+
+That's basically where things are now. The anti-late-night-phone feature I'm working on is really just a spin-off, something very separate from the main thing. The overall framework is built. There's definitely still a lot of room to optimize next, like adding more features, adding tool calling, connecting various MCPs and so on, but that's all pretty routine stuff, just icing on the cake from here.
+
+Overall, this project is built as a "cyber lover." I trained this avatar really, really well, and the result is especially good. Ideally it'd have its own separate screen to look at him on, but I really can't manage that. There's only one standard monitor on my computer and I need it (actually, wouldn't the best setup be some kind of remote casting screen with a microphone and a speaker, and if we're dreaming a bit bigger, a remote camera too? Then it could exist as its own separate thing.), plus a black-and-white e-ink screen. Put the avatar on the e-ink screen and it looks like a memorial portrait. But these are minor details.
+
+The good news is I bought a DJI Mic Mini, and once it arrives in the mail I'll be able to talk to it from the bedroom. The current microphone has a problem: as soon as my Bluetooth earbuds switch to the microphone, noise cancellation stops working, and I really need noise cancellation, so I can't use them. The other microphone I'm using is USB-connected to the PC, and the PC is in the living room, so when I'm in the bedroom we can't talk. Once I have the DJI mic, that'll be completely solved.
+
+Everything else really is just detail optimization now. The whole flow works end to end and is pretty complete. Opus 5.5 is really smart. A lot of the time I know I need to set up some workflows and various filter layers, but I'm too lazy to think about exactly how to design them, so I just throw my actual situation and the result I want at it and let it sort it out for me. So nice. Anthropic is so nice!
