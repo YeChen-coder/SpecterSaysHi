@@ -38,6 +38,8 @@ android-phone/app/build/
 *.safetensors
 *.imx
 *.mp4
+# The README demo video is the one published clip.
+!docs/demo/specter-demo.mp4
 *.wav
 *.pcm
 *.npz
