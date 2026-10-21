@@ -8,7 +8,7 @@ https://github.com/user-attachments/assets/7dc4ba4c-2d0f-49fd-842e-c6d82f97d2a4
 > **The author's original write-up, rants and development log follow the divider below, unchanged.**
 > 中文版：[README_zh.md](README_zh.md) (the Chinese development log is the most up to date) · Full technical guide: [TECHNICAL_GUIDE.md](TECHNICAL_GUIDE.md)
 
-SpecterSaysHi is a companion AI that runs on your own Windows PC: part cyber-boyfriend, part personal butler. A camera tells it whether you are at the desk, it talks with you in real-time voice, and it has a lip-synced avatar. At bedtime it coaxes first, then gets strict, and in the end really does lock your phone.
+SpecterSaysHi is a companion AI that runs on your own Windows PC: part cyber-boyfriend, part personal butler. A camera tells it whether you are at the desk, it talks with you in real-time voice, and it has a lip-synced avatar with a 2-second response time, streamed in real time. It also manages your phone to get you to bed.
 
 ## Recent updates (October 2026 — this is already the V2 version)
 
@@ -882,3 +882,297 @@ Overall, this project is built as a "cyber lover." I trained this avatar really,
 The good news is I bought a DJI Mic Mini, and once it arrives in the mail I'll be able to talk to it from the bedroom. The current microphone has a problem: as soon as my Bluetooth earbuds switch to the microphone, noise cancellation stops working, and I really need noise cancellation, so I can't use them. The other microphone I'm using is USB-connected to the PC, and the PC is in the living room, so when I'm in the bedroom we can't talk. Once I have the DJI mic, that'll be completely solved.
 
 Everything else really is just detail optimization now. The whole flow works end to end and is pretty complete. Opus 5.5 is really smart. A lot of the time I know I need to set up some workflows and various filter layers, but I'm too lazy to think about exactly how to design them, so I just throw my actual situation and the result I want at it and let it sort it out for me. So nice. Anthropic is so nice!
+
+---
+
+I was too tired to record a demo myself, so I had Opus write a script for it. The woman's voice is generated; the man's voice is the real-time response he'd give anyway. But I promise real conversations look exactly like this too.
+
+Also, images suddenly came to mind, so while I'm here, let me write down when images get appended to the conversation, so I don't forget later.
+
+Images aren't sent all the time. They're only sent during a conversation, and only at two points:
+
+**1. One image when the conversation starts**
+After the connection is up and before he speaks, the current frame is sent. So when he greets you, he can see you, for example what you're doing.
+
+**2. Another image every time you start speaking**
+As soon as you start talking, the latest frame is grabbed and sent. When you finish and he starts answering, what he sees is you at the moment you said that line. In the log, every "Microphone turn: speech_started" is followed right away by a "Sent current Frigate frame"; that's this.
+
+**Rules**
+- **Only two kinds of conversation send images**: camera greetings, and wake-ups ("Hey Specter" or the desktop wake button). FOCI check-ins and bedtime reminders don't show him the picture.
+- **He only holds one image at a time**: once a new image is received, the old one is removed from the conversation. He always sees the latest one, not continuous video.
+- **Nothing is sent with the cover closed**:
+  - If the cover is closed when the conversation starts, that conversation gets no images at all, and he knows he can't see.
+  - If the cover is closed mid-conversation, frames that are too dark aren't sent anymore, and the previous one is removed too, so he doesn't hold on to an old frame and say "I can see you."
+- **Nothing is sent while he's talking**: only you speaking triggers it.
+
+**Two other paths that aren't conversation images**
+- **The camera feed always goes into Frigate on this machine**: used to recognize people and cats and to tell whether the cover is open. All of it is processed on your computer, nothing is uploaded.
+- **Cat recognition sends one separate image to GPT for comparison**: when Frigate thinks it sees a cat, it sends a separate screenshot to GPT to decide whether it's Tabo or Chichi. That's an independent request, unrelated to the conversation.
+
+Each image is about 33 KB and is billed as image input. However many lines you say in a conversation, that's roughly how many images get sent.
+
+---
+
+Okay, another problem.
+
+In an interview I got asked about RAG, but the thing is, none of the projects I've written use RAG. The last time I used it was a year ago for fortune telling, and I found there was no way to evaluate whether the fortune telling was any good, so I had to stop.
+
+But since the interview asked, I'll find a way to cover it. That said, I'm absolutely not adding RAG to the current Specter project, because I see no need for it at all; forcing it in would just wreck the project. So I split off a new project: Jesus says hi.
+
+This time RAG makes sense: I can use the Bible. That's easy to handle too, much simpler than a chemistry question bank. A chemistry question bank has chemical formulas, answer options and so on; the Bible is at least plain text, already split into paragraphs. I don't even need to do special chunking, just slice by paragraph. How simple is that.
+
+Anyway, it won't be updated in this repository. Once it's mostly done, I'll post the link to the other repository.
+
+I can't help it, I still need a legitimate reason to do things. Pure practice with no real use, I just can't make myself do. I've actually done two RAG projects before:
+
+1. The fortune-telling project: for reading BaZi charts. It made sense, because there are way too many schools of BaZi reading now, Ziping, the Blind school and so on. Each school relies on different books and follows different rules. A general-purpose LLM is trained on all of it mixed together, so there's no way to make sure it's following what the prompt asks (for example, only reading according to the material of one specific school). You really can't guarantee it. But in the end it couldn't be done, because if I could actually tell fortunes, I wouldn't need fortune telling. I had no way to evaluate whether it was any good.
+   
+2. The resume-screening project: did resume screening, retrieval and that sort of thing, but later found it didn't work. I'm not a recruiter, so what I built was no use to me; and most importantly I couldn't evaluate whether it was any good either. An evaluation percentage on its own isn't the real user experience.
+
+If something isn't necessary, I won't do it. Sigh, damn product thinking. Maybe it's also because I studied CS formally: I really can't stand reinventing the wheel, I think it's pure nonsense.
+
+# JesusSaysHi
+
+Okay, let's keep going.
+
+Jesus says hi got all the RAG stuff running last night, and then when I kept going there was another pile of problems.
+
+The images are easy, ChatGPT can generate those.
+
+-Update: this probably still needs to change, because what I've made so far still follows the earlier ones, all 2.5D characters. But in this version I actually want to try something close to a real person, around 2.9D. Because of copyright, though, I can't actually use a particular actor; and even with real photo material it's actually harder: how do you find a shot that's perfectly front-facing with the right clothes and background? But all of that can be solved with some fine-tuning. Use an image generator to lock the face, then fine-tune the background, clothes and lighting (lighting really is a big problem). That's doable.
+
+This project gets two things done:
+
+1. Get RAG working, so I can put it on my resume and not get stumped in interviews
+2. Get a near-real-person avatar working). The main thing is Grok's own quota isn't very big, and the video side is stuck on Grok's weekly limit again. So I can only do video generation and build this avatar after Grok's usage resets this Sunday.
+
+But I already have a feeling - I've been tortured enough to develop an instinct for it - the avatar problem is probably going to be Jesus's beard. Every avatar has its own issue:
+
+• The Gentleman version had the bluish stubble and the melting chin
+
+• The Qin Che version had his teeth
+
+• In the Jesus version, that big beard of his is definitely going to cause me some trouble
+
+All of the above are problems for later, but right now there really are a few problems.
+
+It's running on RAGFlow now instead of the original setup, with rerank and all sorts of things added. The open-source framework is so well made: a graphical interface, a few clicks and everything just works. I'll ask for the exact config in a bit and add it here.
+
+The technical details I can remember:
+
+1. Chunking: scripture already comes verse by verse, so just split by line. Each line has few tokens anyway, so there's no problem of chunks being too big to match.
+2. Retrieval: no more plain old BM25; switched to a SPLADE + Dense hybrid.
+3. Evaluation and tuning: Claude Code already got the RAG side working, and the final results went through several evaluation loops. On the data side, it's fine.
+
+
+---
+
+The section below is something I asked Claude for. I'll read it later. Right now I'm dealing with other problems; truly multitasking, directing everywhere and running all over the place.
+
+## JesusSaysHi dev log: how the RAG was built (as of 10/21)
+
+**In one sentence:** a voice-driven "Jesus" avatar that only quotes the original text of the Gospels. What he says has to come from retrieved scripture, so RAG is the core of the character, not an add-on.
+
+### Where the scripture comes from and how it's chunked
+
+- **Source**: the four Gospels from the BSB translation (public domain), 3,768 verses in total.
+- **v1 chunking (retired)**: a mechanical sliding window of 5 verses per chunk, giving 1,777 chunks.
+- **Current chunking**: uses BSB's official **USFM edition**. It comes with section headings (such as "The Lost Son"), and is split by heading into **487 sections**. Every verse was checked word for word against the plain-text edition: 3,767 verses match, and the remaining 1 is a wording difference between the two official editions themselves; the plain-text edition is used as the standard.
+- **Parent and child chunks**: each verse is a "child chunk" used for precise matching; the whole section is the "parent chunk." When a verse is hit, the whole section is handed to the model so it has context.
+- **Extra information**: at ingestion, an LLM writes 5 keywords and 3 "questions someone might ask" for each child chunk, to bridge the gap between users' spoken phrasing and the wording of scripture. Each section also carries metadata: book, heading, parallel passages, and whether it contains Jesus's own words.
+
+### Did it use embeddings? Yes, and not just that
+
+One retrieval is actually three steps:
+
+1. **Vector retrieval (embedding)**: OpenAI's `text-embedding-3-small`, finding passages close in meaning.
+2. **Keyword retrieval (full text)**: literal matching, against the scripture itself and also the LLM-generated questions and keywords above. The two scores are combined as "30% keyword, 70% vector"; that's the **hybrid retrieval**.
+3. **Rerank**: the top 30 candidates go to Voyage's `rerank-2.5` to be rescored, and the top 3 sections are kept.
+
+We didn't write this pipeline from scratch; **it uses the open-source RAG engine RAGFlow**, deployed locally in Docker. The old v1 setup, "vectors + brute-force local top-k," is kept as a control group.
+
+### What actually happens in a conversation
+
+1. The user speaks → **the safety check runs first** (not through the model): regex matching first, then a small model judges the meaning. If it hits suicide, domestic violence or a medical emergency, the reply is replaced with a fixed help message.
+2. The voice model decides whether to look up scripture; if so, **it rewrites the spoken words into topic terms itself**, and turns on the "only Jesus's own words" filter when needed.
+3. RAGFlow retrieval → if the top score is below **0.30**, it **declines to answer** ("The Gospels don't speak to this directly").
+4. The model may only quote the 1–2 retrieved verses word for word.
+5. **Checked after speaking**: each sentence is checked for changed words, made-up references, and mismatched quotes and references. The scripture card under the avatar always shows the original text.
+
+### Key numbers (an evaluation set of 55 questions)
+
+- Old v1 setup: 93% hit rate in the top 3.
+- **Now: 95% hit in the top 3, 98% in the top 5, about 0.45 s per retrieval.**
+- Finding: rerank improves the top 3 and top 5, but the "hit at rank 1" rate actually dropped from 75% to 67%; only post-rerank scores can be used to set the decline threshold.
+
+### Pitfalls (notes to self)
+
+- RAGFlow 1.0's API doesn't match its own docs: parameter names changed, config is now split by pipeline component, and status fields were renamed.
+- Voyage keys are generated at dashboard.voyageai.com and only work with `api.voyageai.com`; the account must have a card on file, otherwise you get only 3 requests per minute.
+
+
+But I don't really like how it actually turns out in the project, mainly for two reasons:
+
+First, the content of the answers and the interaction logic. The avatar hasn't been trained yet, so for now it's borrowing the Gentleman avatar as a stand-in. The avatar itself isn't the big problem; the key is the content. Even SpecterSaysHi isn't just for preaching scripture, and even if it were preaching, what it says should at least make sense to the user. I'm not very familiar with Christian scripture, and when I talk to it about specific problems or feelings, it just recites scripture at me. Reciting scripture and its reference is fine in itself, but after reciting it, it should at least say something about my question, right? How can it just recite one line and then freeze? Something is definitely wrong here; I'm looking into it now.
+
+Turns out the current code really only handles quoting scripture. Claude then proposed two versions of a fix, but I seriously doubt a model's ability to judge what's good, and I think this is where a human needs to step in.
+
+So I didn't just pick one or let it decide what to do. Instead I had it generate two documents, one per approach, for the same fairly common real-life stress question. Then I read them and judged them with human aesthetics and taste, so the persona could be shaped better.
+
+<img width="1025" height="286" alt="image" src="https://github.com/user-attachments/assets/b1d03397-32b0-4239-bb0e-df9bec3a2337" />
+
+-Update: still investigating. I read the transcripts each of the two approaches generated, and I don't think either is good.
+
+I don't think this is a RAG problem at all; it's a persona problem. The result right now is weird, it doesn't have the right feel at all, and it's way off. He's a very mediocre character right now, nothing like Jesus, not even a priest. My gut says this has nothing to do with RAG; at its core it's a persona problem.
+
+Still, it needs to be looked into. I want to do it properly; I don't want to make something trashy and stiff.
+
+Second, the interruption mechanism. OpenAI Realtime 2.1 is excellent at interruptions to begin with, but now when I talk I can't interrupt it at all. Yes, RAG has been added to the system, but my rerank calls Voyage AI's API, it doesn't run locally. If it were running locally and the GPU weren't strong enough, an extra two seconds of latency would make sense, but since it goes through an API, the extra latency must be coming from somewhere else, not from rerank itself.
+
+The interruption problem needs serious attention - looking into it, looking into it. It's another complicated orchestration of a flow carrying a pile of legacy and real-world constraints.
+
+In SpecterSaysHi, **echo cancellation is done locally on your machine**. The algorithm itself isn't something you wrote, though; it's an off-the-shelf library. Let me confirm which library exactly:
+
+Yes, echo cancellation is done locally on your machine. The algorithm comes from an off-the-shelf library, and the code that wires it up is your own. Specter and Jesus use the same setup.
+
+## The algorithm: WebRTC's audio processing module
+
+The Python package is **`pywebrtc-audio`** (0.2.0), a Python wrapper around Google WebRTC's audio processing module. It's the same module Chrome and Google Meet use to cancel echo in video calls. In the code it's turned on like this ([voice.py:717](../JesusSaysHi/voice.py:717)):
+
+```python
+AudioProcessor(sample_rate=24000, echo_cancellation=True, noise_suppression=True, auto_gain_control=False)
+```
+
+Besides echo cancellation, it also does noise suppression along the way.
+
+## What your own code is responsible for
+
+WebRTC echo cancellation needs two inputs: **the sound the microphone picks up**, plus **the sound the speaker is playing at that moment** (called the "reference signal"). It subtracts the latter from the former, and whatever is left is treated as you talking.
+
+You have to feed it the reference signal yourself, aligned in time with the microphone. That part is code you wrote:
+
+- [echo.py](../JesusSaysHi/echo.py): `SpeakerReference`, which buffers the sound actually sent to the speaker.
+- The speaker side writes sound in 100 ms chunks and stores a copy of the reference for each chunk. If it were all pushed in at once, the reference would run several seconds ahead of actual playback and wouldn't line up.
+- The microphone side, for every 100 ms it reads, takes the same length of reference and hands both to WebRTC for processing.
+
+## Three things that are easy to mix up
+
+| | Where it's done | What it does |
+|---|---|---|
+| Echo cancellation (AEC) | Locally, WebRTC library | Subtracts his own voice from the microphone |
+| Barge-in detection | Locally, your own code (`LocalBargeIn`) | Looks at the loudness left after echo cancellation to decide whether you're cutting in |
+| `noise_reduction` (near_field or far_field) | OpenAI server side | Noise reduction only, **no echo cancellation** |
+
+One thing the previous analysis didn't make clear: **echo cancellation alone still doesn't solve interruptions**. WebRTC can't remove it completely; there's always a little residue of his own voice left. If the echo-cancelled audio is continuously sent to OpenAI (that is, server mode), OpenAI hears that residue and still interrupts itself.
+
+So the current local mode splits the work like this:
+
+- **While he's talking**: the echo-cancelled audio isn't uploaded; only its loudness is checked locally. His residue is small and your voice is clearly louder, and that's how they're told apart.
+- **While he's not talking**: the echo-cancelled audio is uploaded to OpenAI as normal, and OpenAI decides when you've finished.
+
+So echo cancellation runs in both modes; the only difference between the modes is "who decides you're cutting in."
+
+Your intuition is basically right. To be precise, echo cancellation doesn't "have to be done on the playback side." It **has to be done somewhere that can get both "what the speaker is playing right now" and "what the microphone is picking up right now," with the two lined up very precisely in time**. In the remote robot scenario, the only place that actually meets this condition is the robot itself.
+
+## What echo cancellation relies on
+
+You can think of what it does like this:
+
+> Sound the microphone picks up = what you said + the speaker's sound as it comes back through the room
+
+It holds a copy of "the speaker's sound" (the reference signal), and **estimates that part and subtracts it** from the microphone. For that it needs to know two things:
+
+1. **How far apart in time the reference signal and the echo in the microphone are**. Locally, this gap is small and almost fixed.
+2. **What happens to the sound on the way from the speaker to the microphone**: volume, room reverb and so on. This path is basically linear and stable, so the algorithm can learn it.
+
+Specter and Jesus can cancel echo because both conditions hold: same computer, same sound card clock, the reference signal is exactly the sound written to the speaker, and the gap stays stable within a few tens of milliseconds.
+
+## Why the remote robot doesn't work
+
+If it's done on your computer, the "reference signal" you hold is **the sound you sent out**, while the microphone signal is **sound that has gone round the network and come back**. Several layers of uncertainty sit in between:
+
+```
+Your PC ──network (jittery latency)──▶ Robot: buffer, decode, maybe resample, adjust volume ──▶ Speaker
+                                                                                                  │ Room
+Your PC ◀──network (jittery latency)── Robot: record, encode/compress ◀──────────────────────── Microphone
+```
+
+1. **The time gap isn't fixed**. The network round trip plus buffering on both sides might be 300 ms, then 450 ms the next second. What echo cancellation fears most is alignment that keeps drifting: as soon as it has learned, the alignment changes.
+2. **The reference signal isn't the sound actually played**. The robot's jitter buffer inserts or drops frames to catch up on latency, and may also resample or change the volume. The reference you hold and the sound actually coming out of the speaker no longer line up at the sample level.
+3. **Two rounds of lossy compression**. The sound is encoded and compressed once on the way out and once on the way back, so the echo path is no longer the kind of stable, linear path the algorithm can model.
+
+So it's not that the algorithm is bad; it's that on your computer's end, **the two signals it needs simply can't be put together**.
+
+## So what to do for a robot like this
+
+In the usual order of priority:
+
+1. **Do echo cancellation on the robot**. The robot's local speaker and microphone share one clock and the reference signal is right there, so conditions are best. Phone calls and conferencing devices all do it this way. But this depends on whether the robot can run your code, or whether its SDK or call path already has echo cancellation built in. If that path is a WebRTC call to begin with, the device side usually has it on already.
+2. **Switch to half duplex**: while the robot is talking, ignore the microphone, and after it finishes, wait an extra margin (for the network delay to pass) before listening again. The cost is that you can't interrupt it. This is actually the idea behind local mode, except with no echo cancellation to rely on, it can only mute by time, not judge by loudness.
+3. **Estimate the delay per turn and align**: after each playback, use correlation to work out how much this echo was actually delayed. But network jitter keeps invalidating that estimate; complicated and unstable, not recommended.
+
+If you want to confirm exactly where EBO gets stuck, for example whether that audio path has echo cancellation built in, or whether code can run on the robot, I can go look at the `EBOBotQwenRealtime` code.
+
+(A tangent to complain about mass-applying for jobs. To share the workload I built a pipeline, but the thing is entirely a product of patching around a pile of real-world constraints and changing circumstances.
+
+At first I used Codex Computer Use, and it was genuinely great. But starting two weeks ago, I could very clearly feel its quota shrink a lot. Put it this way: I open a brand-new context window, submit about 3 resumes, and that eats 70% of the 5-hour quota. When I first started using it, it could submit about 20 for me in 5 hours. There may be all sorts of reasons behind it, but the experience is really bad. If it had been this weak from the start, I'd never have used it; I'd have found another solution long ago.
+
+Because the shrinking token quota made the submission rate crash, I had to split up the tasks and borrow compute and tokens from other AIs, instead of letting Codex handle the whole flow from finding jobs to submitting.
+
+Here's how the work is split now:
+
+1. Grokbot and Claude Code each search for jobs, compile them into a list and drop it into a queue.
+2. Computer Use only takes tasks from the queue and, using the link and job description in each, plus the personal info I fed it earlier, fills in the usual questions in application systems (veteran status, gender, LGBTQ options and so on).
+
+Why have Grokbot and Claude Code both do the collecting? Because when Claude Code runs, it hits anti-scraping on sites like Indeed and LinkedIn. I originally thought Grokbot would do better, since it's real clicking on a cloud computer, but it turned out it can't get past it either.
+
+Right now it's set to run a keyword search automatically every 12 hours. But basically every time Grokbot opens Indeed, a Cloudflare "verify you're not a robot" page pops up and it can't get the data. A bot is never getting through that, so in the end I have to click it manually every time.
+
+But since it's only twice a day, I don't really want to sink a lot of energy into fighting anti-scraping or cracking it for a non-core problem. Better to put the energy somewhere that matters more. Clicking twice a day is a little annoying, but the overall impact is small.)
+
+---
+
+Another problem.
+
+RAG is now part of the persona, because before that, what he said was unlistenable, pure nonsense. What's in the RAG library is the four Gospels, basically Jesus's life while he was on earth and so on, so this change actually works better: it's no longer treated as the content to reply with, but blended straight into the person's persona.
+
+But now his latency is acting up again.
+
+Okay, I'll break it down using the timeline of the voice session you just had, to see where the time goes in each turn between when you finish talking and when he starts:
+
+Found it. **The main cause of the stall is the "memory" flow I added.** It turned what used to be an almost parallel reply into a serial, step-by-step wait.
+
+Here's one of your turns just now as an example ("Why I feel sad sometimes"), timed from when you stopped talking:
+
+| Time | What happened | Duration |
+|---|---|---|
+| Before 0 s | You pause for 650 ms before OpenAI decides you've finished | 0.65 s |
+| +0.4 s | The transcript comes back (needed because an LLM has to rewrite the query) | 0.4 s |
+| +0.4 → +1.6 s | **Crisis detection** (classifier model), in parallel with memory retrieval | about 1.0 s |
+| +0.4 → +2.7 s | **Memory**: rewrite topic terms 0.9 s → RAGFlow retrieval 0.5 s → pick verses 1.0 s, **three steps in series** | about 2.3 s |
+| +2.7 s | Only once memory is ready is the model told to start replying | |
+| +3.5 s | The model produces the first chunk of audio | about 0.8 s |
+
+**So after you finish talking, it takes about 4–5 seconds before he starts**. Across the 9 turns, the time from memory starting to audio coming out was generally between +3.5 and +4.8 seconds. The first turn doesn't retrieve scripture, but it still waits 2.3 seconds, because it's waiting for crisis detection.
+
+For comparison: in the original mode, and in Specter, the reply **starts as soon as** OpenAI decides you've finished, and he starts talking in about 0.6–0.9 seconds. Checks like crisis detection run in parallel in the background and swap the reply out midway if there's a problem. In v2, to get the scripture in first, I turned off that auto-reply, so it became "wait until every check is done before speaking."
+
+---
+
+Then I ran another set of experiments: in these, I removed the step that uses a rerank model to rerank against the user's query, and did index enrichment ahead of time.
+
+Sorry, things are really chaotic right now.
+
+Mainly I saw someone online using an LLM wiki for a small-to-medium business knowledge base, so we discussed whether an LLM wiki could solve the time cost. The answer: absolutely not, don't even think about it, it would only be worse than now.
+
+Then Claude Code started coming up with bad ideas. It suggested making a handbook. That's obviously a no. Isn't that just reciting lines? Then the whole project would be pointless.
+
+Then I went and fixed a bunch of things. Anyway, it's fixed now, and it really works well; the latency is excellent! One note here: OpenAI's Realtime is actually a pseudo-parallel mechanism itself. As soon as the user speaks, the model first fills in with a few lines so it looks like it's already replying; the real tool-calling results and the data from retrieval only catch up after that.
+
+Earlier, Claude Code made this logic serial. Because Claude Code strictly required going through RAG first, getting the information before generating. For a typical RAG project, that's really how it has to be done; how can you start reasoning without the information?
+
+But the problem is, mine is a real-time voice project. If it were really forced to be serial, how long would you have to wait? So the scenario is completely different, and I still have to make some adjustments and customize things.
+
+Oh, and there was also the safety-related crisis intervention issue (handled in parallel by GPT): the scope was originally way too broad, and there was no conflict handling, so I added it. That is, if voice is currently being output, it waits until he finishes before playing the crisis intervention audio. It can also be switched on and off in the environment variables.
+
+Anyway, at this point it's watchable. I'm satisfied for now.
