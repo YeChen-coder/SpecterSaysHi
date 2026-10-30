@@ -1176,3 +1176,13 @@ But the problem is, mine is a real-time voice project. If it were really forced 
 Oh, and there was also the safety-related crisis intervention issue (handled in parallel by GPT): the scope was originally way too broad, and there was no conflict handling, so I added it. That is, if voice is currently being output, it waits until he finishes before playing the crisis intervention audio. It can also be switched on and off in the environment variables.
 
 Anyway, at this point it's watchable. I'm satisfied for now.
+
+---
+
+Picking up where I left off. The avatar is done. Since I also have a Muse account, I used Muse to generate the video this time, and the result is about as good or even better, which I'm pretty happy about. No more getting blocked by Grok. We all talk about delegation, but honestly, a video's visual quality still has to be judged by human eyes. Visual effects like this still need a human to tune them, and Claude Code isn't good at looping on this kind of thing. I tuned one version that's at least watchable, but it'll have to go out in the afternoon because I hit my Claude Code usage cap. Sorry I haven't put more effort into the avatar yet. I'll have to wait until I have some free time to look at how to make the mouth, the teeth, and the beard better. Sorry, there's just way too much going on. Anyway, the JesusSaysHi repository should be up this afternoon, or tomorrow morning at the latest.
+
+---
+
+Can't sleep, so a quick update on where things stand.
+
+The Jesus avatar is done, the repository is updated, and there's a demo (https://github.com/YeChen-coder/JesusSaysHi). Sorry about the teeth; they could have been better, but I was in too much of a rush to polish them. Also on the engineering side: there's normally a transition from talking to closing the mouth. The first two avatars both have it, but I didn't get around to reviewing this one before putting out the demo video. I'll add the transition later.
